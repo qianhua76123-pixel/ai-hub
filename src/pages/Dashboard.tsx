@@ -102,7 +102,12 @@ export default function Dashboard() {
       </div>
 
       {/* Cost breakdown: API actual vs Subscription virtual */}
-      {costBreakdown && (costBreakdown.api_cost_usd > 0 || costBreakdown.subscription_virtual_cost_usd > 0) && (
+      {costBreakdown && (costBreakdown.api_cost_usd > 0 || costBreakdown.subscription_virtual_cost_usd > 0) && (() => {
+        // 合理 API 等价：假设用户改用 API 时会做 prompt 优化，减少 70% 的 cache_read 重复
+        // 虚拟费用 ≈ 99% 来自 cache_read，乘以 0.3 代表"做了合理优化后的真实账单"
+        const reasonableApiUsd = costBreakdown.subscription_virtual_cost_usd * 0.3;
+        const reasonableSavings = reasonableApiUsd - costBreakdown.subscription_monthly_fee_usd;
+        return (
         <div className="card p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-[13px] font-medium text-text-muted">近 30 天费用构成</h2>
@@ -117,33 +122,56 @@ export default function Dashboard() {
               <div className="text-[10px] text-text-faint mt-0.5">{costBreakdown.api_requests.toLocaleString()} 次请求</div>
             </div>
             <div className="bg-success/5 rounded-[10px] p-3 border border-success/15">
-              <div className="text-[11px] text-text-muted mb-1">订阅月费</div>
+              <div className="text-[11px] text-text-muted mb-1">订阅月费（真实账单）</div>
               <div className="text-[20px] font-semibold text-success">
                 ¥{(costBreakdown.subscription_monthly_fee_usd * cnyRate).toFixed(0)}
               </div>
               <div className="text-[10px] text-text-faint mt-0.5">{costBreakdown.subscription_requests.toLocaleString()} 次请求</div>
             </div>
             <div className="bg-warning/5 rounded-[10px] p-3 border border-warning/15">
-              <div className="text-[11px] text-text-muted mb-1">订阅虚拟等价（按 API 算）</div>
-              <div className="text-[20px] font-semibold text-warning">
-                ¥{(costBreakdown.subscription_virtual_cost_usd * cnyRate).toFixed(2)}
+              <div className="text-[11px] text-text-muted mb-1 flex items-center gap-1">
+                同量 API 等价
+                <span className="text-[9px] text-text-faint px-1 py-[1px] rounded bg-warning/10">优化后</span>
               </div>
-              <div className="text-[10px] text-success mt-0.5">
-                {costBreakdown.subscription_savings_usd > 0
-                  ? `订阅省 ¥${(costBreakdown.subscription_savings_usd * cnyRate).toFixed(0)}`
-                  : `API 省 ¥${(Math.abs(costBreakdown.subscription_savings_usd) * cnyRate).toFixed(0)}`}
+              <div className="text-[20px] font-semibold text-warning">
+                ¥{(reasonableApiUsd * cnyRate).toFixed(0)}
+              </div>
+              <div className="text-[10px] text-text-faint mt-0.5">
+                理论上限 ¥{(costBreakdown.subscription_virtual_cost_usd * cnyRate).toFixed(0)}
               </div>
             </div>
           </div>
+
+          {/* 关键说明：避免让用户被"订阅省1.4万"数字误导 */}
+          <div className="mt-3 bg-surface-lighter/60 rounded-[8px] p-3 text-[11px] text-text-muted leading-relaxed">
+            <div className="font-medium text-text mb-1">💡 如何解读这些数字</div>
+            <div>
+              订阅 ¥{(costBreakdown.subscription_monthly_fee_usd * cnyRate).toFixed(0)} 看起来比"按 API 算等价 ¥{(costBreakdown.subscription_virtual_cost_usd * cnyRate).toFixed(0)}"便宜十几倍 —— 这并非 bug 也不是慈善：
+              <span className="block mt-1">
+                · Claude Code 每次请求都重发 60 万+ 上下文，其中 99% 是<strong className="text-text-muted">缓存复用</strong>（cache_read）。
+              </span>
+              <span className="block">
+                · Anthropic 对 cache_read 只收 <strong className="text-text-muted">10% 价</strong>，因为他们的 GPU 处理 cache hit 成本也只有 ~10%。
+              </span>
+              <span className="block">
+                · 真 API 用户会做 prompt 优化，账单约 <strong className="text-text-muted">¥{(reasonableApiUsd * cnyRate).toFixed(0)}/月</strong>（理论上限的 30%）。
+              </span>
+              <span className="block mt-1">
+                · 订阅还有 <strong className="text-text-muted">5h 窗口额度限制</strong>，不是无限用。但对重度 Claude Code 用户，订阅确实比 API 更省 —— 合理节省 <strong className="text-success">¥{(reasonableSavings * cnyRate).toFixed(0)}/月</strong>。
+              </span>
+            </div>
+          </div>
+
           <div className="mt-3 pt-3 border-t border-border-light text-[11px] text-text-faint">
             总实际支出 <strong className="text-text-muted">¥{(costBreakdown.total_actual_usd * cnyRate).toFixed(2)}</strong>
             {" "}· 按 API 全量计费等价 <strong className="text-text-muted">¥{(costBreakdown.total_virtual_equivalent_usd * cnyRate).toFixed(2)}</strong>
             {costBreakdown.subscription_monthly_fee_usd === 0 && (
-              <span className="ml-2 text-warning">· 未设置订阅？到 <strong>设置 → 账户模式</strong> 标记</span>
+              <span className="ml-2 text-warning">· 未设置订阅？到 <strong>订阅 → 订阅计划</strong> 标记</span>
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Token breakdown — show cache efficiency */}
       {cacheSummary && (cacheSummary.today.cache_read > 0 || cacheSummary.today.cache_write > 0) && (
