@@ -116,10 +116,11 @@ const benchmarkSources = [
 
 export default function Billing() {
   const [models, setModels] = useState<ModelPrice[]>([]);
-  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [, setPlans] = useState<SubscriptionPlan[]>([]);
   const [costData, setCostData] = useState<CostData | null>(null);
   const [pricingInfo, setPricingInfo] = useState<PricingInfo | null>(null);
   const [roiData, setRoiData] = useState<RoiData | null>(null);
+  const [accountModes, setAccountModes] = useState<{ provider_id: string; mode: string; subscription_monthly_usd: number }[]>([]);
   const [tab, setTab] = useState<"compare" | "models" | "arena" | "plans" | "roi">("compare");
   const [arenaSubTab, setArenaSubTab] = useState<"overall" | "code" | "value" | "cheap">("overall");
   const [syncing, setSyncing] = useState(false);
@@ -133,6 +134,7 @@ export default function Billing() {
     invoke<CostData>("get_cost_comparison").then(setCostData);
     invoke<PricingInfo>("get_pricing_info").then(setPricingInfo);
     invoke<RoiData>("get_subscription_roi").then(setRoiData);
+    invoke<{ provider_id: string; mode: string; subscription_monthly_usd: number }[]>("get_account_modes").then(setAccountModes).catch(() => {});
   }, []);
 
   async function handleSync() {
@@ -509,34 +511,133 @@ export default function Billing() {
         </div>
       )}
 
-      {/* ===== 订阅计划 ===== */}
-      {tab === "plans" && (
-        <div className="grid grid-cols-2 gap-5">
-          {plans.map((p, i) => (
-            <div key={i} className="bg-surface-light rounded-2xl p-6 border border-border hover:shadow-lg hover:-translate-y-0.5 transition-all">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-lg"
-                  style={{ backgroundColor: pColor[p.provider] || "#666" }}>
-                  {p.provider_name[0]}
-                </div>
-                <div>
-                  <div className="font-medium text-lg">{p.plan_name}</div>
-                  <div className="text-xs text-text-faint">{p.provider_name}</div>
-                </div>
-              </div>
-              <div className="text-3xl font-bold mb-3 tracking-tight">
-                {p.price_monthly_usd > 0 ? (
-                  <>¥{p.price_monthly_cny.toFixed(0)}<span className="text-sm text-text-faint ml-2">/月 · ${p.price_monthly_usd}</span></>
-                ) : <span className="text-success">按量计费</span>}
-              </div>
-              <p className="text-sm text-text-muted mb-3 leading-relaxed">{p.includes}</p>
-              <div className="text-xs text-primary bg-primary/5 rounded-xl px-3 py-2 border border-primary/10">
-                {p.api_equivalent_note}
-              </div>
+      {/* ===== 订阅计划（可切换当前档位）===== */}
+      {tab === "plans" && (() => {
+        // 每个 provider 的所有档位
+        const PROVIDER_PLANS: { provider_id: string; provider_name: string; plans: { id: string; name: string; usd: number; mode: string; desc: string }[] }[] = [
+          {
+            provider_id: "anthropic", provider_name: "Anthropic (Claude)",
+            plans: [
+              { id: "api", name: "API 按量付费", usd: 0, mode: "api", desc: "按 token 精确计费，适合零散用" },
+              { id: "pro", name: "Claude Pro", usd: 20, mode: "subscription", desc: "5 小时窗口约 50 条 Sonnet 消息" },
+              { id: "max5", name: "Claude Max 5×", usd: 100, mode: "subscription", desc: "Pro 5 倍额度，适合中重度用户" },
+              { id: "max20", name: "Claude Max 20×", usd: 200, mode: "subscription", desc: "Pro 20 倍额度，重度开发者首选" },
+              { id: "team", name: "Claude Team", usd: 25, mode: "subscription", desc: "团队版，每人/月" },
+            ],
+          },
+          {
+            provider_id: "openai", provider_name: "OpenAI (ChatGPT)",
+            plans: [
+              { id: "api", name: "API 按量付费", usd: 0, mode: "api", desc: "按 token 精确计费" },
+              { id: "plus", name: "ChatGPT Plus", usd: 20, mode: "subscription", desc: "GPT-5.4 + DALL-E + 80次/3h" },
+              { id: "pro", name: "ChatGPT Pro", usd: 200, mode: "subscription", desc: "o3 无限 + Sora 视频" },
+              { id: "team", name: "ChatGPT Team", usd: 25, mode: "subscription", desc: "团队版，每人/月" },
+            ],
+          },
+          {
+            provider_id: "google", provider_name: "Google (Gemini)",
+            plans: [
+              { id: "api", name: "API 按量付费", usd: 0, mode: "api", desc: "Google AI Studio" },
+              { id: "advanced", name: "Gemini Advanced", usd: 19.99, mode: "subscription", desc: "Gemini 3.1 Pro + 2TB 存储" },
+              { id: "ultra", name: "Gemini AI Ultra", usd: 249.99, mode: "subscription", desc: "Deep Research + Veo 视频" },
+            ],
+          },
+          {
+            provider_id: "cursor", provider_name: "Cursor",
+            plans: [
+              { id: "hobby", name: "免费版", usd: 0, mode: "api", desc: "每月有限次数，适合尝试" },
+              { id: "pro", name: "Cursor Pro", usd: 20, mode: "subscription", desc: "500 次快速 + 无限慢速" },
+              { id: "business", name: "Cursor Business", usd: 40, mode: "subscription", desc: "团队版，每人/月" },
+            ],
+          },
+          {
+            provider_id: "copilot", provider_name: "GitHub Copilot",
+            plans: [
+              { id: "free", name: "免费版", usd: 0, mode: "api", desc: "学生/开源维护者" },
+              { id: "pro", name: "Copilot Pro", usd: 10, mode: "subscription", desc: "基础订阅" },
+              { id: "pro_plus", name: "Copilot Pro+", usd: 39, mode: "subscription", desc: "前沿模型访问" },
+              { id: "business", name: "Copilot Business", usd: 19, mode: "subscription", desc: "团队版，每人/月" },
+            ],
+          },
+          {
+            provider_id: "xai", provider_name: "xAI (Grok)",
+            plans: [
+              { id: "api", name: "API 按量付费", usd: 0, mode: "api", desc: "按 token 付费" },
+              { id: "plus", name: "SuperGrok", usd: 30, mode: "subscription", desc: "Grok 4 标准订阅" },
+              { id: "heavy", name: "SuperGrok Heavy", usd: 300, mode: "subscription", desc: "Grok 4 Heavy + 优先访问" },
+            ],
+          },
+        ];
+
+        async function switchPlan(providerId: string, plan: { usd: number; mode: string }) {
+          try {
+            await invoke("set_account_mode", { providerId, mode: plan.mode, subscriptionMonthlyUsd: plan.usd });
+            const updated = await invoke<typeof accountModes>("get_account_modes");
+            setAccountModes(updated);
+            // Refresh ROI
+            invoke<RoiData>("get_subscription_roi").then(setRoiData);
+          } catch (e) { console.error(e); }
+        }
+
+        return (
+          <div className="space-y-6">
+            <div className="bg-primary/5 rounded-xl p-4 border border-primary/20 text-[12px] text-text-muted leading-relaxed">
+              <strong className="text-primary">如何使用：</strong>点击任意档位即可标记为你当前使用的订阅。系统会自动把这个 Provider 的所有历史流量重新归类为"订阅虚拟等价"，Dashboard 费用构成立刻更新。
             </div>
-          ))}
-        </div>
-      )}
+
+            {PROVIDER_PLANS.map(pg => {
+              const current = accountModes.find(m => m.provider_id === pg.provider_id);
+              const currentUsd = current?.subscription_monthly_usd || 0;
+              const currentMode = current?.mode || "api";
+              const currentPlanId = pg.plans.find(p => p.mode === currentMode && Math.abs(p.usd - currentUsd) < 0.01)?.id || "api";
+
+              return (
+                <div key={pg.provider_id}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: pColor[pg.provider_id] || "#666" }} />
+                    <h3 className="text-[14px] font-medium">{pg.provider_name}</h3>
+                    {current && currentMode === "subscription" && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-success/10 text-success border border-success/20">
+                        当前订阅中
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {pg.plans.map(p => {
+                      const selected = p.id === currentPlanId;
+                      return (
+                        <button key={p.id}
+                          onClick={() => switchPlan(pg.provider_id, p)}
+                          className={cn(
+                            "text-left p-4 rounded-xl border-2 transition-all",
+                            selected
+                              ? "border-primary bg-primary/5 shadow-md"
+                              : "border-border-light bg-surface-light hover:border-primary/40 hover:shadow"
+                          )}>
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="font-medium text-[13px]">{p.name}</div>
+                            {selected && <span className="text-primary text-[11px]">✓ 已选</span>}
+                          </div>
+                          <div className="text-[20px] font-bold tracking-tight mb-1">
+                            {p.usd > 0 ? (
+                              <>¥{(p.usd * 7.25).toFixed(0)}<span className="text-[11px] text-text-faint ml-1">/月 · ${p.usd}</span></>
+                            ) : <span className="text-success text-[16px]">按量/免费</span>}
+                          </div>
+                          <p className="text-[11px] text-text-muted leading-relaxed">{p.desc}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="text-[11px] text-text-faint pt-2 border-t border-border-light">
+              💡 切换后历史流量自动按新档位重新归类。未检测到的 Provider 可去「设置 → 账户模式」补充。
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ===== ROI 分析 ===== */}
       {tab === "roi" && (

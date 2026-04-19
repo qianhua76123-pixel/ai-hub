@@ -30,8 +30,9 @@ pub struct NewsResult {
 }
 
 const HN_SEARCH_URL: &str = "https://hn.algolia.com/api/v1/search";
-const REDDIT_LOCALLLAMA_URL: &str = "https://www.reddit.com/r/LocalLLaMA/top.json?t=week&limit=15";
-const REDDIT_SINGULARITY_URL: &str = "https://www.reddit.com/r/singularity/top.json?t=week&limit=10";
+// Reddit 对非浏览器请求返回 "Blocked" HTML，不再使用
+// 改用 HuggingFace 博客 RSS + HN 扩大关键词覆盖
+const HF_BLOG_RSS: &str = "https://huggingface.co/blog/feed.xml";
 
 // ── Hacker News Algolia search ────────────────────────────────
 
@@ -57,12 +58,17 @@ struct HNHit {
 }
 
 async fn fetch_hn(client: &reqwest::Client) -> Result<Vec<NewsItem>, String> {
-    // 搜索 AI 相关关键词，按 points 排序
-    let queries = ["Claude", "GPT-5", "Gemini", "LLM", "open source model"];
+    // 扩大关键词覆盖，覆盖 Reddit 原本的讨论面
+    let queries = [
+        "Claude", "GPT-5", "GPT-6", "Gemini", "Grok",
+        "LLM", "open source model", "DeepSeek", "Qwen",
+        "MCP", "AI agent", "Cursor", "Claude Code",
+    ];
     let mut all_items = Vec::new();
 
+    // 分数门槛降低到 50（更多条目）
     for q in queries.iter() {
-        let url = format!("{}?query={}&tags=story&numericFilters=points%3E100&hitsPerPage=5", HN_SEARCH_URL, q);
+        let url = format!("{}?query={}&tags=story&numericFilters=points%3E50&hitsPerPage=3", HN_SEARCH_URL, urlencoding_minimal(q));
         if let Ok(resp) = client.get(&url).send().await {
             if let Ok(hn) = resp.json::<HNResp>().await {
                 for hit in hn.hits {
@@ -87,71 +93,70 @@ async fn fetch_hn(client: &reqwest::Client) -> Result<Vec<NewsItem>, String> {
         }
     }
 
-    // 去重 + 按分数/时间排序
     all_items.sort_by(|a, b| b.score.cmp(&a.score));
     all_items.dedup_by(|a, b| a.title == b.title);
-    all_items.truncate(15);
+    all_items.truncate(30);
     Ok(all_items)
 }
 
-// ── Reddit top posts ──────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct RedditResp {
-    data: RedditData,
+fn urlencoding_minimal(s: &str) -> String {
+    s.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c.to_string() }
+        else { format!("%{:02X}", c as u32) }
+    }).collect()
 }
 
-#[derive(Debug, Deserialize)]
-struct RedditData {
-    children: Vec<RedditChild>,
-}
+/// Fetch HuggingFace blog RSS (reliable, high-quality AI posts)
+async fn fetch_hf_blog(client: &reqwest::Client) -> Result<Vec<NewsItem>, String> {
+    let resp = client.get(HF_BLOG_RSS)
+        .header("User-Agent", "Mozilla/5.0 (compatible; ai-hub/0.3)")
+        .send().await.map_err(|e| format!("HF: {}", e))?;
+    let text = resp.text().await.map_err(|e| format!("HF text: {}", e))?;
 
-#[derive(Debug, Deserialize)]
-struct RedditChild {
-    data: RedditPost,
-}
+    // Minimal RSS parser — extract <item>, <title>, <link>, <pubDate>, <description>
+    let mut items = Vec::new();
+    let parts: Vec<&str> = text.split("<item>").skip(1).take(20).collect();
+    for (i, part) in parts.iter().enumerate() {
+        let title = extract_tag(part, "title").unwrap_or_default();
+        let link = extract_tag(part, "link").unwrap_or_default();
+        let date = extract_tag(part, "pubDate").unwrap_or_default();
+        let desc = extract_tag(part, "description").unwrap_or_default();
+        if title.is_empty() { continue; }
 
-#[derive(Debug, Deserialize)]
-struct RedditPost {
-    id: String,
-    title: String,
-    #[serde(default)]
-    url: String,
-    #[serde(default)]
-    permalink: String,
-    #[serde(default)]
-    selftext: String,
-    #[serde(default)]
-    ups: i64,
-    #[serde(default)]
-    created_utc: f64,
-}
+        // Parse pubDate (RFC 2822)
+        let ts = chrono::DateTime::parse_from_rfc2822(&date)
+            .map(|dt| dt.timestamp_millis()).unwrap_or(0);
 
-async fn fetch_reddit(client: &reqwest::Client, url: &str, subreddit: &str) -> Result<Vec<NewsItem>, String> {
-    let resp = client.get(url)
-        .header("User-Agent", "ai-hub-rss/0.3")
-        .send().await.map_err(|e| format!("Reddit/{}: {}", subreddit, e))?;
-    let rdt: RedditResp = resp.json().await.map_err(|e| format!("Reddit parse: {}", e))?;
-    let items = rdt.data.children.into_iter().map(|c| {
-        let p = c.data;
-        let url = if p.url.starts_with("http") && !p.url.contains("reddit.com") {
-            p.url
-        } else {
-            format!("https://www.reddit.com{}", p.permalink)
-        };
-        let category = categorize(&p.title);
-        NewsItem {
-            id: format!("rd_{}_{}", subreddit, p.id),
-            title: p.title.clone(),
-            url,
-            source: format!("r/{}", subreddit),
-            summary: p.selftext.chars().take(300).collect(),
-            timestamp: (p.created_utc * 1000.0) as i64,
-            score: p.ups,
-            category,
-        }
-    }).collect();
+        // Strip CDATA and HTML
+        let clean_desc = desc
+            .replace("<![CDATA[", "").replace("]]>", "")
+            .split('<').next().unwrap_or("").trim()
+            .chars().take(300).collect::<String>();
+
+        items.push(NewsItem {
+            id: format!("hf_{}", i),
+            title: clean_title(&title),
+            url: link.trim().to_string(),
+            source: "HuggingFace".into(),
+            summary: clean_desc,
+            timestamp: ts,
+            score: 0,
+            category: categorize(&title),
+        });
+    }
     Ok(items)
+}
+
+fn extract_tag(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)?;
+    Some(xml[start..start + end].to_string())
+}
+
+fn clean_title(s: &str) -> String {
+    s.replace("<![CDATA[", "").replace("]]>", "").trim().to_string()
 }
 
 // ── Category inference ────────────────────────────────────────
@@ -183,16 +188,14 @@ pub async fn fetch_all() -> NewsResult {
 
     let mut errors = Vec::new();
 
-    let (hn, reddit_ll, reddit_sing) = tokio::join!(
+    let (hn, hf) = tokio::join!(
         fetch_hn(&client),
-        fetch_reddit(&client, REDDIT_LOCALLLAMA_URL, "LocalLLaMA"),
-        fetch_reddit(&client, REDDIT_SINGULARITY_URL, "singularity"),
+        fetch_hf_blog(&client),
     );
 
     let mut items = Vec::new();
     items.extend(hn.unwrap_or_else(|e| { errors.push(e); vec![] }));
-    items.extend(reddit_ll.unwrap_or_else(|e| { errors.push(e); vec![] }));
-    items.extend(reddit_sing.unwrap_or_else(|e| { errors.push(e); vec![] }));
+    items.extend(hf.unwrap_or_else(|e| { errors.push(e); vec![] }));
 
     // Sort by timestamp DESC
     items.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
