@@ -23,6 +23,7 @@ export default function Dashboard() {
   const [dailyUsage, setDailyUsage] = useState<DailyUsage[]>([]);
   const [todayStats, setTodayStats] = useState({ tasks: 0, tokens: 0, cost: 0 });
   const [totalStats, setTotalStats] = useState({ requests: 0, tokens: 0, cost: 0 });
+  const [todayDetail, setTodayDetail] = useState<{ real_cost: number; api_cost: number; subscription_prorated: number; subscription_virtual: number; reasonable_api_cost: number } | null>(null);
   const [healthData, setHealthData] = useState<RateLimitStatus[]>([]);
   const [cnyRate, setCnyRate] = useState(7.2);
   const [budget, setBudget] = useState<{ monthly_spend_usd: number; monthly_limit_usd: number; percent: number; warning_level: string } | null>(null);
@@ -39,8 +40,11 @@ export default function Dashboard() {
       // 实时流量列表（仅用于显示最近 20 条，不用于统计）
       invoke<TrafficRecord[]>("get_recent_traffic", { limit: 20 }).then(setTraffic).catch(() => {});
       // 今日真实统计（后端全量 SUM，不受 limit 影响）
-      invoke<{ requests: number; tokens: number; cost: number }>("get_today_stats")
-        .then(s => setTodayStats({ tasks: s.requests, tokens: s.tokens, cost: s.cost }))
+      invoke<{ requests: number; tokens: number; cost: number; real_cost: number; api_cost: number; subscription_prorated: number; subscription_virtual: number; reasonable_api_cost: number }>("get_today_stats")
+        .then(s => {
+          setTodayStats({ tasks: s.requests, tokens: s.tokens, cost: s.cost });
+          setTodayDetail({ real_cost: s.real_cost, api_cost: s.api_cost, subscription_prorated: s.subscription_prorated, subscription_virtual: s.subscription_virtual, reasonable_api_cost: s.reasonable_api_cost });
+        })
         .catch(() => {});
       invoke<DailyUsage[]>("get_daily_usage", { days: 7 }).then(setDailyUsage).catch(() => {});
       invoke<RateLimitStatus[]>("get_rate_limit_status").then(setHealthData).catch(() => {});
@@ -86,19 +90,38 @@ export default function Dashboard() {
 
       {/* Stats — premium cards */}
       <div className="grid grid-cols-4 gap-4">
-        {[
-          { label: "已接入工具", value: String(providers.length), sub: "个", color: "#0d9488" },
-          { label: "今日请求", value: todayStats.tasks.toLocaleString(), sub: "次", color: "#0ea5e9" },
-          { label: "今日新消耗 Token", value: formatTokens(todayStats.tokens), sub: "", color: "#f59e0b" },
-          { label: "今日费用", value: "¥" + (todayStats.cost * cnyRate).toFixed(2), sub: "", color: "#ef4444" },
-        ].map((s) => (
-          <div key={s.label} className="card p-5 glow-teal">
-            <div className="text-[12px] text-text-muted mb-2">{s.label}</div>
-            <div className="stat-value text-[28px]" style={{ color: s.color }}>
-              {s.value}<span className="text-[14px] text-text-faint ml-0.5">{s.sub}</span>
-            </div>
+        <div className="card p-5 glow-teal">
+          <div className="text-[12px] text-text-muted mb-2">已接入工具</div>
+          <div className="stat-value text-[28px]" style={{ color: "#0d9488" }}>
+            {providers.length}<span className="text-[14px] text-text-faint ml-0.5">个</span>
           </div>
-        ))}
+        </div>
+        <div className="card p-5 glow-teal">
+          <div className="text-[12px] text-text-muted mb-2">今日请求</div>
+          <div className="stat-value text-[28px]" style={{ color: "#0ea5e9" }}>
+            {todayStats.tasks.toLocaleString()}<span className="text-[14px] text-text-faint ml-0.5">次</span>
+          </div>
+        </div>
+        <div className="card p-5 glow-teal">
+          <div className="text-[12px] text-text-muted mb-2">今日新消耗 Token</div>
+          <div className="stat-value text-[28px]" style={{ color: "#f59e0b" }}>
+            {formatTokens(todayStats.tokens)}
+          </div>
+        </div>
+        <div className="card p-5 glow-teal">
+          <div className="text-[12px] text-text-muted mb-2">
+            今日真实支出
+            <span className="text-[10px] text-text-faint ml-1">(订阅日摊 + API 真付)</span>
+          </div>
+          <div className="stat-value text-[28px]" style={{ color: "#ef4444" }}>
+            ¥{((todayDetail?.real_cost ?? 0) * cnyRate).toFixed(2)}
+          </div>
+          {todayDetail && todayDetail.reasonable_api_cost > 0 && (
+            <div className="text-[10px] text-text-faint mt-1">
+              同量 API 等价 ¥{(todayDetail.reasonable_api_cost * cnyRate).toFixed(0)} · 理论上限 ¥{(todayStats.cost * cnyRate).toFixed(0)}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Cost breakdown: API actual vs Subscription virtual */}

@@ -244,7 +244,9 @@ impl Database {
         let today_start = chrono::Local::now().date_naive().and_hms_opt(0,0,0)
             .and_then(|n| n.and_local_timezone(chrono::Local).single())
             .map(|dt| dt.timestamp_millis()).unwrap_or(0);
-        let (requests, tokens, cache_reused, cost) = conn.query_row(
+
+        // 总计（所有 cost_mode 混在一起的理论上限）
+        let (requests, tokens, cache_reused, theoretical_cost) = conn.query_row(
             "SELECT COUNT(*),
                     COALESCE(SUM(input_tokens + cache_creation_tokens + output_tokens), 0),
                     COALESCE(SUM(cache_read_tokens), 0),
@@ -253,11 +255,39 @@ impl Database {
             params![today_start],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, f64>(3)?)),
         ).unwrap_or((0, 0, 0, 0.0));
+
+        // 按账户模式拆分
+        let api_cost: f64 = conn.query_row(
+            "SELECT COALESCE(SUM(estimated_cost), 0.0) FROM traffic WHERE timestamp >= ?1 AND cost_mode = 'api'",
+            params![today_start], |r| r.get(0)
+        ).unwrap_or(0.0);
+        let sub_virtual_cost: f64 = conn.query_row(
+            "SELECT COALESCE(SUM(estimated_cost), 0.0) FROM traffic WHERE timestamp >= ?1 AND cost_mode IN ('subscription','hybrid')",
+            params![today_start], |r| r.get(0)
+        ).unwrap_or(0.0);
+
+        // 订阅日均（月费 / 30）
+        let sub_monthly_fee: f64 = conn.query_row(
+            "SELECT COALESCE(SUM(subscription_monthly_usd), 0) FROM account_modes WHERE mode IN ('subscription','hybrid')",
+            [], |r| r.get(0)
+        ).unwrap_or(0.0);
+        let sub_prorated = sub_monthly_fee / 30.0;
+
+        // 今日"真实支出" = API 真付 + 订阅日摊
+        let real_today_cost = api_cost + sub_prorated;
+        // 合理 API 等价 = 虚拟 × 0.3 (prompt 优化后)
+        let reasonable_api_cost = sub_virtual_cost * 0.3;
+
         Ok(serde_json::json!({
             "requests": requests,
-            "tokens": tokens,           // 真实新消耗
-            "cache_reused": cache_reused, // 复用缓存 token（不重复计费）
-            "cost": cost,
+            "tokens": tokens,
+            "cache_reused": cache_reused,
+            "cost": theoretical_cost,              // 理论上限（全按 API 全价算）
+            "real_cost": real_today_cost,          // 真实支出（API 真付 + 订阅日摊）
+            "api_cost": api_cost,                  // 今日 API 模式真实付费
+            "subscription_prorated": sub_prorated, // 订阅日均
+            "subscription_virtual": sub_virtual_cost, // 订阅虚拟理论上限
+            "reasonable_api_cost": reasonable_api_cost, // 合理 API 等价（优化后）
         }))
     }
 
