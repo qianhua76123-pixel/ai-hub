@@ -129,10 +129,13 @@ fn parse_claude_log_entry(val: &serde_json::Value, db: &Arc<Database>) {
     let input_tokens = usage.get("input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
     let cache_creation = usage.get("cache_creation_input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
     let cache_read = usage.get("cache_read_input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
-    let total_input = input_tokens + cache_creation + cache_read;
+    // 重要：token 总数只记录"新消耗"的部分。cache_read 是从缓存读的旧 token，
+    // 同一段上下文在每次对话中会被反复读取，如果累加会严重虚高（实时流量显示 60万+ token 其实大部分是重复的 cache_read）
+    // cache_read 只参与费用计算（按 10% 价格），不计入 token 总量
+    let total_input = input_tokens + cache_creation;
     let output_tokens = usage.get("output_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
 
-    if total_input == 0 && output_tokens == 0 {
+    if total_input == 0 && output_tokens == 0 && cache_read == 0 {
         return;
     }
 
