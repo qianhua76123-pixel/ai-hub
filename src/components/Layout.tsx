@@ -30,13 +30,14 @@ export default function Layout() {
     <div className="h-screen flex bg-gradient-scenic text-text">
       {/* Translucent sidebar */}
       <aside className="w-[200px] sidebar-glass border-r border-border/60 flex flex-col shrink-0">
-        {/* Drag region / title bar area */}
-        <div className="h-12 flex items-end px-4 pb-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
+        {/* Drag region — macOS traffic lights live at left 12-72px in overlay mode,
+            so push the logo down + right to avoid overlap */}
+        <div className="h-[52px] flex items-center pl-[78px] pr-3" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
           <div className="flex items-center gap-2">
-            <div className="w-[22px] h-[22px] rounded-[6px] bg-gradient-to-br from-primary to-accent flex items-center justify-center">
+            <div className="w-[22px] h-[22px] rounded-[6px] bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-sm">
               <span className="text-white text-[10px] font-bold">A</span>
             </div>
-            <span className="text-[14px] font-semibold tracking-tight text-text">AI Hub</span>
+            <span className="text-[13px] font-semibold tracking-tight text-text">AI Hub</span>
           </div>
         </div>
 
