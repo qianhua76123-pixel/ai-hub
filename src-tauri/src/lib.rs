@@ -765,7 +765,12 @@ pub fn run() {
     let db = Arc::new(database);
     let health_monitor = Arc::new(HealthMonitor::new());
 
-    traffic::scan_all_sources(&db);
+    // 启动扫描移到后台线程，避免阻塞 Tauri main thread（7000+ 条记录时会 spawn git 卡死）
+    let db_for_initial_scan = db.clone();
+    std::thread::spawn(move || {
+        traffic::scan_all_sources(&db_for_initial_scan);
+        println!("[Traffic] Initial scan complete");
+    });
 
     let db_for_proxy = db.clone();
     let health_for_proxy = health_monitor.clone();

@@ -7,6 +7,38 @@ use std::sync::{Arc, Mutex};
 // Track last-scanned file sizes to enable incremental scanning
 static SCAN_STATE: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
 
+// 缓存 git branch per cwd，避免对同一工作目录重复 spawn git 进程
+static GIT_BRANCH_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn get_git_branch_cached(cwd: &str) -> String {
+    if cwd.is_empty() { return String::new(); }
+    // Try cache first
+    {
+        let guard = GIT_BRANCH_CACHE.lock().unwrap();
+        if let Some(ref map) = *guard {
+            if let Some(b) = map.get(cwd) {
+                return b.clone();
+            }
+        }
+    }
+    // Only spawn git ONCE per unique cwd across the entire app lifetime
+    let branch = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() { String::from_utf8(o.stdout).ok() } else { None })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    // Store in cache (even empty string)
+    {
+        let mut guard = GIT_BRANCH_CACHE.lock().unwrap();
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(cwd.to_string(), branch.clone());
+    }
+    branch
+}
+
 /// 价格表（每百万 token，美元）
 struct ModelPricing {
     input: f64,
@@ -163,19 +195,8 @@ fn parse_claude_log_entry(val: &serde_json::Value, db: &Arc<Database>) {
         String::new()
     };
 
-    // Try to detect git branch for the working directory
-    let branch = if !cwd.is_empty() {
-        std::process::Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(cwd)
-            .output()
-            .ok()
-            .and_then(|o| if o.status.success() { String::from_utf8(o.stdout).ok() } else { None })
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // Git branch: cached per cwd — spawn git at most once per unique project
+    let branch = get_git_branch_cached(cwd);
 
     let record = TrafficRecord {
         id,
