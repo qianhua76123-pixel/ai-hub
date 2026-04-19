@@ -339,6 +339,21 @@ fn get_stack_cost_estimate(state: tauri::State<'_, AppState>) -> advisor::StackC
     advisor::estimate_stack_cost(&subs, &usage)
 }
 
+/// 基于订阅页 account_modes 的统一 advisor 分析（新版，不再依赖 user_subscriptions 表）
+#[tauri::command]
+fn get_advisor_analysis(state: tauri::State<'_, AppState>) -> advisor::AdvisorResult {
+    let modes_raw = state.db.get_account_modes().unwrap_or_default();
+    let modes: Vec<(String, String, f64)> = modes_raw.into_iter().filter_map(|v| {
+        Some((
+            v["provider_id"].as_str()?.to_string(),
+            v["mode"].as_str()?.to_string(),
+            v["subscription_monthly_usd"].as_f64()?,
+        ))
+    }).collect();
+    let usage = state.db.get_monthly_usage_by_provider().unwrap_or_default();
+    advisor::analyze_account_modes(&modes, &usage)
+}
+
 // ===== 预算 =====
 
 #[tauri::command]
@@ -833,6 +848,7 @@ pub fn run() {
             get_model_prices, get_subscription_plans, get_cost_comparison, get_pricing_info, update_model_price, fetch_latest_pricing,
             recommend_route, refresh_exchange_rate, get_budgets, set_budget, delete_budget, get_budget_status,
             add_user_subscription, get_user_subscriptions, delete_user_subscription, get_subscription_recommendations, get_stack_cost_estimate,
+            get_advisor_analysis,
             get_cache_summary, get_today_stats, fetch_news,
             get_account_modes, set_account_mode, get_cost_breakdown,
             detect_account_modes, apply_detected_modes, get_provider_health, get_rate_limit_status, get_usage_by_project, get_subscription_roi, tag_traffic_project, get_route_decision,

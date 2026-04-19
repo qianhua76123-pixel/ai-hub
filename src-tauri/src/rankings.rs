@@ -61,13 +61,18 @@ struct ArenaEntry {
     rank: i32,
     model: String,
     vendor: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_null")]
     license: String,
     score: i64,
     #[serde(default)]
     ci: i64,
     #[serde(default)]
     votes: i64,
+}
+
+/// Accept both "string" and null for optional text fields (some leaderboards return null license)
+fn string_or_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
 // ── Artificial Analysis deserialization ─────────────────────

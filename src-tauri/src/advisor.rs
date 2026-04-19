@@ -1,8 +1,41 @@
 //! Subscription overlap detector + savings advisor
 //! Core differentiation feature: analyzes user's subscriptions + usage,
 //! detects overlapping/redundant subscriptions, and recommends savings.
+//!
+//! Data source: `account_modes` table (user's configured subscriptions per provider).
+//! The old `user_subscriptions` table is retained for backward compat but advisor
+//! no longer uses it — everything flows from Billing page's plan switcher.
 
 use serde::{Deserialize, Serialize};
+
+/// Infer semantic category from provider_id for overlap detection
+pub fn infer_category(provider_id: &str) -> &'static str {
+    match provider_id {
+        "anthropic" | "openai" | "google" | "xai" => "chat",       // generic chat / API
+        "cursor" | "windsurf" | "zed" => "coding_ide",              // IDE-bundled coding
+        "copilot" | "tabnine" => "coding_ide",                      // IDE plugin coding
+        "codeium" | "continue" => "coding_cli",                     // CLI / editor-agnostic
+        _ => "other",
+    }
+}
+
+/// Stable display name for a provider_id
+pub fn provider_display(provider_id: &str) -> &'static str {
+    match provider_id {
+        "anthropic" => "Anthropic (Claude)",
+        "openai" => "OpenAI (ChatGPT)",
+        "google" => "Google (Gemini)",
+        "xai" => "xAI (Grok)",
+        "cursor" => "Cursor",
+        "copilot" => "GitHub Copilot",
+        "windsurf" => "Windsurf",
+        "zed" => "Zed",
+        "tabnine" => "Tabnine",
+        "codeium" => "Codeium",
+        "continue" => "Continue",
+        _ => "Unknown",
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSubscription {
@@ -147,6 +180,168 @@ pub struct StackCostItem {
     pub monthly_usd: f64,
     pub yearly_usd: f64,
     pub percent_of_total: f64,
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// NEW: analyze based on account_modes (unified with Billing page)
+// ═══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdvisorResult {
+    pub total_monthly_usd: f64,
+    pub total_yearly_usd: f64,
+    pub subscription_count: i32,
+    pub api_only_count: i32,
+    pub items: Vec<AdvisorSubItem>,
+    pub recommendations: Vec<Recommendation>,
+    pub total_savings_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdvisorSubItem {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub mode: String,                  // api | subscription | hybrid
+    pub monthly_usd: f64,
+    pub category: String,
+    pub monthly_requests: i64,         // 30天请求数
+    pub virtual_api_cost_usd: f64,     // 按 API 全价算的等价
+    pub reasonable_api_cost_usd: f64,  // 虚拟 × 0.3（优化后）
+    pub utilization: String,           // "high" | "normal" | "low" | "unused"
+}
+
+/// Analyze based on account_modes + 30-day usage
+pub fn analyze_account_modes(
+    account_modes: &[(String, String, f64)], // (provider_id, mode, monthly_usd)
+    monthly_usage: &std::collections::HashMap<String, (i64, f64)>, // provider -> (requests, virtual_cost_usd)
+) -> AdvisorResult {
+    let mut items: Vec<AdvisorSubItem> = account_modes.iter().map(|(pid, mode, usd)| {
+        let (requests, virt_cost) = monthly_usage.get(pid).copied().unwrap_or((0, 0.0));
+        let reasonable = virt_cost * 0.3;
+        let utilization = if mode == "api" {
+            if virt_cost > 0.01 { "normal" } else { "unused" }
+        } else {
+            // Subscription: compare virtual/optimized cost to what you pay
+            if virt_cost > usd * 5.0 { "high" }         // Very heavy user, worth it
+            else if reasonable > *usd { "normal" }      // Good fit
+            else if requests < 100 { "low" }            // Underused
+            else { "unused" }
+        };
+        AdvisorSubItem {
+            provider_id: pid.clone(),
+            provider_name: provider_display(pid).to_string(),
+            mode: mode.clone(),
+            monthly_usd: *usd,
+            category: infer_category(pid).to_string(),
+            monthly_requests: requests,
+            virtual_api_cost_usd: virt_cost,
+            reasonable_api_cost_usd: reasonable,
+            utilization: utilization.into(),
+        }
+    }).collect();
+
+    // 排序: 订阅优先 + 按月费降序
+    items.sort_by(|a, b| {
+        let a_key = (if a.mode == "api" { 1 } else { 0 }, -a.monthly_usd as i64);
+        let b_key = (if b.mode == "api" { 1 } else { 0 }, -b.monthly_usd as i64);
+        a_key.cmp(&b_key)
+    });
+
+    let subs: Vec<&AdvisorSubItem> = items.iter().filter(|i| i.mode != "api").collect();
+    let total_monthly: f64 = subs.iter().map(|s| s.monthly_usd).sum();
+    let api_only_count = items.iter().filter(|i| i.mode == "api").count() as i32;
+
+    // === 生成建议 ===
+    let mut recs = Vec::new();
+
+    // Rule 1: IDE coding 多个订阅
+    let ide_subs: Vec<&&AdvisorSubItem> = subs.iter().filter(|s| s.category == "coding_ide").collect();
+    if ide_subs.len() > 1 {
+        let total: f64 = ide_subs.iter().map(|s| s.monthly_usd).sum();
+        let cheapest = ide_subs.iter().min_by(|a, b| a.monthly_usd.partial_cmp(&b.monthly_usd).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+        recs.push(Recommendation {
+            kind: "overlap".into(), severity: "high".into(),
+            title: format!("IDE 编程订阅重叠 ({} 个)", ide_subs.len()),
+            description: format!("同时订阅 {}，功能 90% 重叠。建议保留最常用的，或让团队成员分用不同工具。",
+                ide_subs.iter().map(|s| s.provider_name.as_str()).collect::<Vec<_>>().join("、")),
+            monthly_savings_usd: total - cheapest.monthly_usd,
+            affected_subscriptions: ide_subs.iter().map(|s| s.provider_id.clone()).collect(),
+            action: "cancel".into(),
+            suggested_replacement: Some(cheapest.provider_name.clone()),
+        });
+    }
+
+    // Rule 2: 聊天订阅重叠
+    let chat_subs: Vec<&&AdvisorSubItem> = subs.iter().filter(|s| s.category == "chat").collect();
+    if chat_subs.len() > 1 {
+        let total: f64 = chat_subs.iter().map(|s| s.monthly_usd).sum();
+        let cheapest = chat_subs.iter().min_by(|a, b| a.monthly_usd.partial_cmp(&b.monthly_usd).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+        recs.push(Recommendation {
+            kind: "overlap".into(), severity: "medium".into(),
+            title: format!("聊天订阅重叠 ({} 个)", chat_subs.len()),
+            description: "ChatGPT Plus / Claude Pro / Gemini Advanced 功能高度相似，同时订阅多个的日常利用率会偏低".into(),
+            monthly_savings_usd: total - cheapest.monthly_usd,
+            affected_subscriptions: chat_subs.iter().map(|s| s.provider_id.clone()).collect(),
+            action: "cancel".into(),
+            suggested_replacement: Some(cheapest.provider_name.clone()),
+        });
+    }
+
+    // Rule 3: 订阅但利用率极低
+    for s in &subs {
+        if s.utilization == "low" || s.utilization == "unused" {
+            recs.push(Recommendation {
+                kind: "underused".into(), severity: "medium".into(),
+                title: format!("{} 使用率很低", s.provider_name),
+                description: format!(
+                    "过去 30 天仅 {} 次请求，对应 API 等价 ${:.2}。订阅月费 ${:.0} 可能超配。",
+                    s.monthly_requests, s.reasonable_api_cost_usd, s.monthly_usd
+                ),
+                monthly_savings_usd: s.monthly_usd - s.reasonable_api_cost_usd.max(0.0),
+                affected_subscriptions: vec![s.provider_id.clone()],
+                action: "cancel".into(),
+                suggested_replacement: Some(format!("{} API 按量", s.provider_name)),
+            });
+        }
+    }
+
+    // Rule 4: 订阅用户但 API 等价超过订阅费 5 倍 —— 可能档位太低
+    for s in &subs {
+        if s.utilization == "high" && s.reasonable_api_cost_usd > s.monthly_usd * 5.0 {
+            recs.push(Recommendation {
+                kind: "upgrade_recommended".into(), severity: "low".into(),
+                title: format!("{} 使用强度很高", s.provider_name),
+                description: format!(
+                    "API 等价 ${:.0}/月，是订阅费 ${:.0} 的 {:.0}x。订阅非常划算；若有更高档（Max/Pro 大档）可考虑升级避免限流。",
+                    s.reasonable_api_cost_usd, s.monthly_usd,
+                    s.reasonable_api_cost_usd / s.monthly_usd.max(1.0)
+                ),
+                monthly_savings_usd: 0.0, // 不是省钱建议，是避免限流
+                affected_subscriptions: vec![s.provider_id.clone()],
+                action: "upgrade".into(),
+                suggested_replacement: None,
+            });
+        }
+    }
+
+    // 按 severity + savings 排序
+    recs.sort_by(|a, b| {
+        let sev = |s: &str| match s { "high" => 0, "medium" => 1, _ => 2 };
+        sev(&a.severity).cmp(&sev(&b.severity))
+            .then(b.monthly_savings_usd.partial_cmp(&a.monthly_savings_usd).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let total_savings: f64 = recs.iter().map(|r| r.monthly_savings_usd).sum();
+
+    AdvisorResult {
+        total_monthly_usd: total_monthly,
+        total_yearly_usd: total_monthly * 12.0,
+        subscription_count: subs.len() as i32,
+        api_only_count,
+        items,
+        recommendations: recs,
+        total_savings_usd: total_savings,
+    }
 }
 
 pub fn estimate_stack_cost(
