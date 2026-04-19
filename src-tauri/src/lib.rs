@@ -46,7 +46,7 @@ fn get_app_info() -> serde_json::Value {
     let rate = pricing::get_pricing_info().currency_rate_usd_to_cny;
     serde_json::json!({
         "name": "AI Hub",
-        "version": "0.3.0",
+        "version": "0.3.1",
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "currency_rate": rate,
