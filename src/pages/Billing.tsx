@@ -6,13 +6,10 @@ import {
   TrendingUp,
   ArrowRightLeft,
   Layers,
-  Trophy,
   RefreshCw,
   Loader2,
   Sparkles,
   Info,
-  ExternalLink,
-  Calculator,
   CheckCircle2,
   XCircle,
   MinusCircle,
@@ -105,15 +102,6 @@ const pColor: Record<string, string> = {
   mistral: "#ff7000", cursor: "#00d4aa", copilot: "#6e40c9",
 };
 
-// 评比数据来源
-const benchmarkSources = [
-  { name: "LMSYS Arena (综合)", field: "Arena ELO", url: "https://lmarena.ai/?leaderboard" },
-  { name: "LMSYS Arena (代码)", field: "Code Arena", url: "https://lmarena.ai/?leaderboard&category=coding" },
-  { name: "SWE-bench Verified", field: "SWE-bench", url: "https://www.swebench.com" },
-  { name: "Aider Polyglot", field: "Aider", url: "https://aider.chat/docs/leaderboards/" },
-  { name: "OpenRouter 价格", field: "实时价格", url: "https://openrouter.ai/models" },
-];
-
 export default function Billing() {
   const [models, setModels] = useState<ModelPrice[]>([]);
   const [, setPlans] = useState<SubscriptionPlan[]>([]);
@@ -121,12 +109,9 @@ export default function Billing() {
   const [pricingInfo, setPricingInfo] = useState<PricingInfo | null>(null);
   const [roiData, setRoiData] = useState<RoiData | null>(null);
   const [accountModes, setAccountModes] = useState<{ provider_id: string; mode: string; subscription_monthly_usd: number }[]>([]);
-  const [tab, setTab] = useState<"compare" | "models" | "arena" | "plans" | "roi">("compare");
-  const [arenaSubTab, setArenaSubTab] = useState<"overall" | "code" | "value" | "cheap">("overall");
+  const [tab, setTab] = useState<"compare" | "models" | "plans">("plans");
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
-  const [benchUpdating, setBenchUpdating] = useState(false);
-  const [benchMsg, setBenchMsg] = useState("");
 
   useEffect(() => {
     invoke<ModelPrice[]>("get_model_prices").then(setModels);
@@ -151,17 +136,6 @@ export default function Billing() {
     setSyncing(false);
     setTimeout(() => setSyncMsg(""), 5000);
   }
-
-  // Extract code_elo from note field (set by benchmarks.rs)
-  function getCodeElo(m: ModelPrice): number {
-    const match = m.note.match(/code_elo:(\d+)/);
-    return match ? parseInt(match[1]) : 0;
-  }
-
-  // Multi-dimensional rankings
-  const arenaOverall = [...models].filter(m => m.arena_score > 0).sort((a, b) => b.arena_score - a.arena_score);
-  const arenaCode = [...models].filter(m => getCodeElo(m) > 0).sort((a, b) => getCodeElo(b) - getCodeElo(a));
-  // arenaValue and arenaCheap computed inline in the table renderer below
 
   return (
     <div className="space-y-8">
@@ -191,11 +165,9 @@ export default function Billing() {
       {/* Tab 切换 */}
       <div className="flex gap-1 bg-surface-light rounded-xl p-1 border border-border w-fit">
         {[
-          { key: "compare" as const, label: "订阅 vs API", icon: ArrowRightLeft },
-          { key: "models" as const, label: "模型价格", icon: Layers },
-          { key: "arena" as const, label: "模型评比", icon: Trophy },
           { key: "plans" as const, label: "订阅计划", icon: CreditCard },
-          { key: "roi" as const, label: "ROI 分析", icon: Calculator },
+          { key: "compare" as const, label: "费用对比", icon: ArrowRightLeft },
+          { key: "models" as const, label: "模型价格", icon: Layers },
         ].map((t) => (
           <button
             key={t.key}
@@ -342,174 +314,6 @@ export default function Billing() {
         </div>
       )}
 
-      {/* ===== 模型评比 ===== */}
-      {tab === "arena" && (
-        <div className="space-y-5">
-          {/* 子榜单切换 + 更新按钮 */}
-          <div className="flex items-center justify-between">
-            <div className="flex gap-1 bg-surface-light rounded-xl p-1 border border-border">
-              {([
-                { key: "overall", label: "综合排行", icon: Trophy },
-                { key: "code", label: "代码能力", icon: Layers },
-                { key: "value", label: "性价比之王", icon: TrendingDown },
-                { key: "cheap", label: "价格最低", icon: CreditCard },
-              ] as const).map((st) => (
-                <button key={st.key} onClick={() => setArenaSubTab(st.key)}
-                  className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-all",
-                    arenaSubTab === st.key ? "bg-surface-lighter text-text font-medium shadow-sm" : "text-text-muted hover:text-text")}>
-                  <st.icon size={12} /> {st.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={async () => {
-                setBenchUpdating(true); setBenchMsg("");
-                try { const r = await invoke<string>("run_benchmark_update", { dryRun: false }); setBenchMsg(r);
-                  invoke<ModelPrice[]>("get_model_prices").then(setModels);
-                } catch(e) { setBenchMsg(String(e)); }
-                setBenchUpdating(false);
-                setTimeout(() => setBenchMsg(""), 8000);
-              }}
-                disabled={benchUpdating}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-primary bg-primary/8 hover:bg-primary/12 font-medium transition-colors">
-                {benchUpdating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                更新评测数据
-              </button>
-            </div>
-          </div>
-
-          {benchMsg && <pre className="bg-surface-lighter rounded-xl p-3 text-[11px] text-text-muted max-h-40 overflow-auto border border-border-light">{benchMsg}</pre>}
-
-          {/* 数据来源 */}
-          <div className="flex gap-2 flex-wrap">
-            {benchmarkSources.map((src) => (
-              <a key={src.name} href={src.url} target="_blank" rel="noopener noreferrer"
-                className="text-[11px] px-2.5 py-1 rounded-full bg-surface-lighter border border-border/50 text-text-muted hover:text-primary hover:border-primary/30 transition-all inline-flex items-center gap-1">
-                {src.name} <ExternalLink size={9} />
-              </a>
-            ))}
-            <span className="text-[11px] text-text-faint px-2 py-1">{models.length} 个模型</span>
-          </div>
-
-          {/* 排行榜表格 */}
-          <div className="bg-surface-light rounded-2xl border border-border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-text-faint text-xs">
-                  <th className="text-left p-3 w-10">#</th>
-                  <th className="text-left p-3">模型</th>
-                  {arenaSubTab === "overall" && <><th className="text-center p-3">Arena ELO</th><th className="text-center p-3">SWE-bench</th><th className="text-center p-3">Aider</th><th className="text-center p-3">HumanEval</th></>}
-                  {arenaSubTab === "code" && <><th className="text-center p-3">Code Arena</th><th className="text-center p-3">SWE-bench</th><th className="text-center p-3">Aider</th><th className="text-center p-3">HumanEval</th></>}
-                  {arenaSubTab === "value" && <><th className="text-center p-3">Arena ELO</th><th className="text-right p-3">均价 $/M</th><th className="text-center p-3">ELO/$ 比</th><th className="text-center p-3">性价比</th></>}
-                  {arenaSubTab === "cheap" && <><th className="text-right p-3">输入 $/M</th><th className="text-right p-3">输出 $/M</th><th className="text-center p-3">Arena ELO</th><th className="text-center p-3">上下文</th></>}
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  let ranked: (ModelPrice & { _score: number })[] = [];
-
-                  if (arenaSubTab === "overall") {
-                    ranked = arenaOverall.map(m => ({ ...m, _score: m.arena_score }));
-                  } else if (arenaSubTab === "code") {
-                    // Prefer Arena Code ELO when available, fallback to composite score
-                    ranked = arenaCode.length > 0
-                      ? arenaCode.map(m => ({ ...m, _score: getCodeElo(m) }))
-                      : [...models]
-                        .filter(m => m.swe_bench > 0 || m.aider_polyglot > 0)
-                        .map(m => ({ ...m, _score: Math.round(m.swe_bench * 0.4 + m.aider_polyglot * 0.4 + m.humaneval * 0.2) }))
-                        .sort((a, b) => b._score - a._score);
-                  } else if (arenaSubTab === "value") {
-                    ranked = [...models]
-                      .filter(m => m.arena_score > 0 && m.input_per_m > 0)
-                      .map(m => {
-                        const avg = (m.input_per_m + m.output_per_m) / 2;
-                        return { ...m, _score: Math.round(m.arena_score / avg) };
-                      })
-                      .sort((a, b) => b._score - a._score);
-                  } else {
-                    ranked = [...models]
-                      .filter(m => m.arena_score > 0)
-                      .map(m => ({ ...m, _score: -((m.input_per_m + m.output_per_m) / 2) }))
-                      .sort((a, b) => {
-                        const aAvg = (a.input_per_m + a.output_per_m) / 2;
-                        const bAvg = (b.input_per_m + b.output_per_m) / 2;
-                        return aAvg - bAvg;
-                      });
-                  }
-
-                  return ranked.slice(0, 30).map((m, i) => {
-                    const avgPrice = (m.input_per_m + m.output_per_m) / 2;
-                    const costPerf = avgPrice > 0 ? Math.round(m.arena_score / avgPrice) : Infinity;
-
-                    return (
-                      <tr key={m.model_id} className={cn("border-b border-border/30 hover:bg-surface-lighter/50 transition-colors", i === 0 && "bg-warning/3")}>
-                        <td className="p-3 font-bold">
-                          {i < 3 ? ["🥇", "🥈", "🥉"][i] : <span className="text-text-faint text-xs">{i + 1}</span>}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pColor[m.provider] || "#666" }} />
-                            <div>
-                              <div className="text-[13px] font-medium">{m.model_name}</div>
-                              <div className="text-[10px] text-text-faint">{m.provider_name}</div>
-                            </div>
-                            <span className={cn("text-[10px] px-1.5 py-0.5 rounded border", catColor[m.category])}>{catLabel[m.category]}</span>
-                          </div>
-                        </td>
-
-                        {arenaSubTab === "overall" && <>
-                          <td className="p-3 text-center font-bold text-base">{m.arena_score}</td>
-                          <td className="p-3 text-center">{m.swe_bench > 0 ? (
-                            <div className="flex items-center justify-center gap-1.5"><div className="w-16 h-1.5 bg-surface rounded-full overflow-hidden"><div className="h-full bg-primary rounded-full" style={{width:`${m.swe_bench}%`}} /></div><span className="text-[10px] w-8">{m.swe_bench}%</span></div>
-                          ) : <span className="text-text-faint text-xs">-</span>}</td>
-                          <td className="p-3 text-center">{m.aider_polyglot > 0 ? (
-                            <div className="flex items-center justify-center gap-1.5"><div className="w-16 h-1.5 bg-surface rounded-full overflow-hidden"><div className="h-full bg-success rounded-full" style={{width:`${m.aider_polyglot}%`}} /></div><span className="text-[10px] w-8">{m.aider_polyglot}%</span></div>
-                          ) : <span className="text-text-faint text-xs">-</span>}</td>
-                          <td className="p-3 text-center text-xs">{m.humaneval > 0 ? `${m.humaneval}%` : "-"}</td>
-                        </>}
-
-                        {arenaSubTab === "code" && <>
-                          <td className="p-3 text-center font-bold text-base">{getCodeElo(m) > 0 ? getCodeElo(m) : <span className="text-text-faint text-xs">-</span>}</td>
-                          <td className="p-3 text-center">{m.swe_bench > 0 ? <span className="font-medium">{m.swe_bench}%</span> : "-"}</td>
-                          <td className="p-3 text-center">{m.aider_polyglot > 0 ? <span className="font-medium">{m.aider_polyglot}%</span> : "-"}</td>
-                          <td className="p-3 text-center text-xs">{m.humaneval > 0 ? `${m.humaneval}%` : "-"}</td>
-                        </>}
-
-                        {arenaSubTab === "value" && <>
-                          <td className="p-3 text-center font-medium">{m.arena_score}</td>
-                          <td className="p-3 text-right font-mono text-xs">${avgPrice.toFixed(2)}</td>
-                          <td className="p-3 text-center font-bold text-base">{costPerf === Infinity ? "∞" : costPerf}</td>
-                          <td className="p-3 text-center">
-                            <span className={cn("text-xs font-medium px-2 py-0.5 rounded-lg border",
-                              costPerf > 1000 ? "bg-success/10 text-success border-success/20" :
-                              costPerf > 500 ? "bg-primary/10 text-primary border-primary/20" :
-                              costPerf > 200 ? "bg-warning/10 text-warning border-warning/20" :
-                              "bg-danger/10 text-danger border-danger/20"
-                            )}>{costPerf > 1000 ? "极高" : costPerf > 500 ? "高" : costPerf > 200 ? "中" : "低"}</span>
-                          </td>
-                        </>}
-
-                        {arenaSubTab === "cheap" && <>
-                          <td className="p-3 text-right font-mono text-xs">{m.input_per_m > 0 ? `$${m.input_per_m}` : <span className="text-success">免费</span>}</td>
-                          <td className="p-3 text-right font-mono text-xs">{m.output_per_m > 0 ? `$${m.output_per_m}` : <span className="text-success">免费</span>}</td>
-                          <td className="p-3 text-center font-medium">{m.arena_score}</td>
-                          <td className="p-3 text-center text-xs text-text-faint">{m.context_window >= 1000000 ? (m.context_window/1000000)+"M" : (m.context_window/1000)+"K"}</td>
-                        </>}
-                      </tr>
-                    );
-                  });
-                })()}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-xs text-text-faint">
-            {arenaSubTab === "overall" && "按 Arena ELO 排序 · 数据来自公开排行榜 · 点击「更新评测数据」拉取最新分数"}
-            {arenaSubTab === "code" && "Code Arena: LMSYS 编程专项 ELO · SWE-bench/Aider/HumanEval: 独立编程评测"}
-            {arenaSubTab === "value" && "性价比 = Arena ELO / 平均价格($/M) · 数值越高越划算"}
-            {arenaSubTab === "cheap" && "按平均价格升序 · 免费模型排最前"}
-          </p>
-        </div>
-      )}
 
       {/* ===== 订阅计划（可切换当前档位）===== */}
       {tab === "plans" && (() => {
@@ -639,38 +443,9 @@ export default function Billing() {
         );
       })()}
 
-      {/* ===== ROI 分析 ===== */}
-      {tab === "roi" && (
+      {/* ROI 详情（合并到 compare tab）*/}
+      {tab === "compare" && roiData && roiData.results.length > 0 && (
         <div className="space-y-6">
-          {roiData && roiData.results.length > 0 ? (
-            <>
-              {/* Summary */}
-              <div className="grid grid-cols-3 gap-4">
-                <div className="bg-surface-light rounded-2xl p-5 border border-border">
-                  <div className="text-xs text-text-faint mb-1.5">订阅总费用 (月)</div>
-                  <div className="text-2xl font-bold tracking-tight">
-                    ¥{roiData.results.reduce((a, r) => a + r.subscription_cny, 0).toFixed(0)}
-                  </div>
-                </div>
-                <div className="bg-surface-light rounded-2xl p-5 border border-border">
-                  <div className="text-xs text-text-faint mb-1.5">等价 API 花费 (30天)</div>
-                  <div className="text-2xl font-bold tracking-tight">
-                    ¥{roiData.results.reduce((a, r) => a + r.api_cost_cny, 0).toFixed(2)}
-                  </div>
-                </div>
-                <div className="bg-surface-light rounded-2xl p-5 border border-border">
-                  <div className="text-xs text-text-faint mb-1.5">总节省 / 多花</div>
-                  {(() => {
-                    const totalSavings = roiData.results.reduce((a, r) => a + r.savings_cny, 0);
-                    const positive = totalSavings > 0;
-                    return (
-                      <div className={cn("text-2xl font-bold tracking-tight", positive ? "text-success" : "text-danger")}>
-                        {positive ? "+" : ""}¥{totalSavings.toFixed(2)}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
 
               {/* Per-subscription ROI cards */}
               <div className="space-y-4">
@@ -768,16 +543,8 @@ export default function Billing() {
               </div>
 
               <p className="text-xs text-text-faint">
-                ROI = (API等价花费 - 订阅费用) / 订阅费用 * 100% · 正值表示订阅更划算 · 基于近 30 天实际使用量计算 · 预测基于近两周趋势
+                ROI = (API等价花费 - 订阅费用) / 订阅费用 * 100% · 正值表示订阅更划算 · 基于近 30 天实际使用量 · 预测基于近两周趋势
               </p>
-            </>
-          ) : (
-            <div className="bg-surface-light rounded-2xl p-12 border border-border text-center">
-              <Calculator size={32} className="mx-auto mb-4 text-text-faint" />
-              <p className="text-text-muted">暂无足够数据计算 ROI</p>
-              <p className="text-sm text-text-faint mt-1">使用 AI 工具一段时间后自动生成分析</p>
-            </div>
-          )}
         </div>
       )}
     </div>

@@ -4,7 +4,6 @@
 //! 2. Artificial Analysis — quality index + speed + price composite
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // api.wulong.dev 实际支持的榜单 (验证通过):
 //   text / code / vision / document / search / text-to-image / image-edit /

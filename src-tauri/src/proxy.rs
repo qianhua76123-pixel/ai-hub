@@ -1,6 +1,5 @@
 use crate::db::{Database, TrafficRecord};
 use crate::health::HealthMonitor;
-use crate::traffic::estimate_cost;
 use axum::{
     body::Body,
     extract::State,
