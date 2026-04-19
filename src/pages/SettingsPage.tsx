@@ -18,6 +18,7 @@ export default function SettingsPage() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateMsg, setUpdateMsg] = useState("");
   const [theme, setThemeState] = useState(getStoredTheme);
+  const [accountModes, setAccountModes] = useState<{ provider_id: string; mode: string; subscription_monthly_usd: number }[]>([]);
   const [budgetLimit, setBudgetLimit] = useState("");
   const [budgetNotify70, setBudgetNotify70] = useState(true);
   const [budgetNotify90, setBudgetNotify90] = useState(true);
@@ -28,6 +29,7 @@ export default function SettingsPage() {
     invoke<ToolConfig[]>("get_manageable_tools").then(setTools);
     invoke<string>("get_env_exports").then(setEnvExports);
     invoke<AppInfo>("get_app_info").then(setAppInfo);
+    invoke<{ provider_id: string; mode: string; subscription_monthly_usd: number }[]>("get_account_modes").then(setAccountModes).catch(() => {});
     // Load budget
     invoke<{ id: string; monthly_limit_usd: number; notify_70: boolean; notify_90: boolean; pause_at_100: boolean }[]>("get_budgets").then(budgets => {
       const global = budgets.find(b => b.id === "global");
@@ -123,6 +125,115 @@ export default function SettingsPage() {
               </button>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Account Mode — with preset plans */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 border-b border-border-light bg-surface-lighter/50">
+          <h2 className="text-[13px] font-medium text-text-muted">账户模式（自动识别订阅档位）</h2>
+        </div>
+        <div className="px-5 py-4 space-y-3">
+          <p className="text-[11px] text-text-faint leading-relaxed">
+            选择每个 Provider 你实际订阅的档位。系统会自动区分 <strong className="text-text-muted">API 真实付费</strong> 和 <strong className="text-text-muted">订阅虚拟等价</strong>（如果改走 API 会花多少钱）。
+          </p>
+          {(() => {
+            // 预设档位数据库 — 覆盖 2026 年主流订阅档位
+            const PLANS: Record<string, { label: string; plans: { id: string; name: string; usd: number; mode: string }[] }> = {
+              anthropic: {
+                label: "Anthropic (Claude)",
+                plans: [
+                  { id: "api", name: "API 按量付费", usd: 0, mode: "api" },
+                  { id: "pro", name: "Claude Pro ($20/月)", usd: 20, mode: "subscription" },
+                  { id: "max5", name: "Claude Max 5x ($100/月)", usd: 100, mode: "subscription" },
+                  { id: "max20", name: "Claude Max 20x ($200/月)", usd: 200, mode: "subscription" },
+                  { id: "team", name: "Claude Team ($25/人/月)", usd: 25, mode: "subscription" },
+                ]
+              },
+              openai: {
+                label: "OpenAI (ChatGPT)",
+                plans: [
+                  { id: "api", name: "API 按量付费", usd: 0, mode: "api" },
+                  { id: "plus", name: "ChatGPT Plus ($20/月)", usd: 20, mode: "subscription" },
+                  { id: "pro", name: "ChatGPT Pro ($200/月)", usd: 200, mode: "subscription" },
+                  { id: "team", name: "ChatGPT Team ($25/人/月)", usd: 25, mode: "subscription" },
+                ]
+              },
+              google: {
+                label: "Google (Gemini)",
+                plans: [
+                  { id: "api", name: "API 按量付费", usd: 0, mode: "api" },
+                  { id: "advanced", name: "Gemini Advanced ($19.99/月)", usd: 19.99, mode: "subscription" },
+                  { id: "ultra", name: "Gemini AI Ultra ($249.99/月)", usd: 249.99, mode: "subscription" },
+                ]
+              },
+              cursor: {
+                label: "Cursor",
+                plans: [
+                  { id: "hobby", name: "免费版 ($0)", usd: 0, mode: "api" },
+                  { id: "pro", name: "Cursor Pro ($20/月)", usd: 20, mode: "subscription" },
+                  { id: "business", name: "Cursor Business ($40/人/月)", usd: 40, mode: "subscription" },
+                ]
+              },
+              copilot: {
+                label: "GitHub Copilot",
+                plans: [
+                  { id: "free", name: "免费版", usd: 0, mode: "api" },
+                  { id: "pro", name: "Copilot Pro ($10/月)", usd: 10, mode: "subscription" },
+                  { id: "pro_plus", name: "Copilot Pro+ ($39/月)", usd: 39, mode: "subscription" },
+                  { id: "business", name: "Copilot Business ($19/人/月)", usd: 19, mode: "subscription" },
+                ]
+              },
+              xai: {
+                label: "xAI (Grok)",
+                plans: [
+                  { id: "api", name: "API 按量付费", usd: 0, mode: "api" },
+                  { id: "plus", name: "SuperGrok ($30/月)", usd: 30, mode: "subscription" },
+                  { id: "heavy", name: "SuperGrok Heavy ($300/月)", usd: 300, mode: "subscription" },
+                ]
+              },
+            };
+
+            async function updatePlan(providerId: string, planUsd: number, planMode: string) {
+              await invoke("set_account_mode", { providerId, mode: planMode, subscriptionMonthlyUsd: planUsd });
+              setAccountModes(await invoke("get_account_modes"));
+              setMsg(`${providerId} 已更新`);
+              setTimeout(() => setMsg(""), 2500);
+            }
+
+            return (
+              <div className="space-y-2">
+                {Object.entries(PLANS).map(([pid, cfg]) => {
+                  const current = accountModes.find(m => m.provider_id === pid);
+                  const currentUsd = current?.subscription_monthly_usd || 0;
+                  const currentMode = current?.mode || "api";
+                  // Match by mode + usd
+                  const currentPlan = cfg.plans.find(p => p.mode === currentMode && Math.abs(p.usd - currentUsd) < 0.01)?.id || "api";
+                  return (
+                    <div key={pid} className="flex items-center gap-3 text-[12px]">
+                      <span className="w-36 text-text-muted">{cfg.label}</span>
+                      <select value={currentPlan}
+                        onChange={(e) => {
+                          const plan = cfg.plans.find(p => p.id === e.target.value);
+                          if (plan) updatePlan(pid, plan.usd, plan.mode);
+                        }}
+                        className="flex-1 bg-surface border border-border rounded-[6px] px-2.5 py-1.5 text-[12px] focus:outline-none focus:border-primary">
+                        {cfg.plans.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                      {currentMode === "subscription" && (
+                        <span className="text-[10px] text-success px-2 py-0.5 rounded-full bg-success/10 border border-success/20">
+                          订阅中
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          <p className="text-[10px] text-text-faint pt-2 border-t border-border-light">
+            💡 提示：订阅用户切换档位后，历史流量会自动重新标记模式，「费用构成」卡片实时更新
+          </p>
         </div>
       </div>
 

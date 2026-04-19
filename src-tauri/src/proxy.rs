@@ -85,6 +85,36 @@ fn extract_usage_from_body(body: &str, provider_id: &str) -> (String, i64, i64) 
     }
 }
 
+/// 从 body 提取 Anthropic 缓存 tokens (cache_creation, cache_read)
+fn extract_cache_tokens_from_body(body: &str) -> (i64, i64) {
+    let val: serde_json::Value = match serde_json::from_str(body) { Ok(v) => v, Err(_) => return (0, 0) };
+    let usage = match val.get("usage") { Some(u) => u, None => return (0, 0) };
+    let cw = usage.get("cache_creation_input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+    let cr = usage.get("cache_read_input_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+    (cw, cr)
+}
+
+/// 从 SSE chunks 提取缓存 tokens
+fn extract_cache_tokens_from_sse(chunks: &str) -> (i64, i64) {
+    let mut cw = 0i64;
+    let mut cr = 0i64;
+    for line in chunks.lines() {
+        let data = if let Some(d) = line.strip_prefix("data: ") { d } else { continue };
+        if data == "[DONE]" { continue; }
+        let val: serde_json::Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
+        // message_start.message.usage has cache tokens
+        if let Some(usage) = val.get("message").and_then(|m| m.get("usage")) {
+            if let Some(t) = usage.get("cache_creation_input_tokens").and_then(|t| t.as_i64()) { cw = cw.max(t); }
+            if let Some(t) = usage.get("cache_read_input_tokens").and_then(|t| t.as_i64()) { cr = cr.max(t); }
+        }
+        if let Some(usage) = val.get("usage") {
+            if let Some(t) = usage.get("cache_creation_input_tokens").and_then(|t| t.as_i64()) { cw = cw.max(t); }
+            if let Some(t) = usage.get("cache_read_input_tokens").and_then(|t| t.as_i64()) { cr = cr.max(t); }
+        }
+    }
+    (cw, cr)
+}
+
 /// 从 SSE streaming chunks 中提取 usage（最后一个 chunk 通常包含 usage）
 fn extract_usage_from_sse_chunks(chunks: &str, provider_id: &str) -> (String, i64, i64) {
     let mut model = "unknown".to_string();
@@ -299,6 +329,7 @@ async fn proxy_handler(
                 estimated_cost: 0.0,
                 source: format!("AI Hub Proxy → {}", provider_name),
                 project, git_branch, working_dir,
+                cache_creation_tokens: 0, cache_read_tokens: 0,
             };
             state.db.insert_traffic(&record).ok();
             return make_error_response(502, &format!("Proxy error: {}", e));
@@ -391,7 +422,9 @@ async fn proxy_handler(
             // Extract usage from collected SSE data
             let latency = start_time.elapsed().as_millis() as i64;
             let (model, input_tokens, output_tokens) = extract_usage_from_sse_chunks(&collected, &provider_id_owned);
-            let cost = estimate_cost(&model, input_tokens, output_tokens);
+            let (cache_write, cache_read) = extract_cache_tokens_from_sse(&collected);
+            // Use precise cost if possible
+            let cost = crate::pricing::calculate_cost_precise(&model, input_tokens, cache_write, cache_read, output_tokens);
 
             let record_status = if resp_status.is_success() { "success" }
                 else if resp_status.as_u16() == 429 { "rate_limited" }
@@ -411,6 +444,8 @@ async fn proxy_handler(
                 estimated_cost: cost,
                 source: format!("AI Hub Proxy → {}", provider_name_owned),
                 project, git_branch, working_dir,
+                cache_creation_tokens: cache_write,
+                cache_read_tokens: cache_read,
             };
             db.insert_traffic(&record).ok();
         });
@@ -434,7 +469,8 @@ async fn proxy_handler(
 
         let resp_str = String::from_utf8_lossy(&resp_bytes);
         let (model, input_tokens, output_tokens) = extract_usage_from_body(&resp_str, provider_id);
-        let cost = estimate_cost(&model, input_tokens, output_tokens);
+        let (cache_write, cache_read) = extract_cache_tokens_from_body(&resp_str);
+        let cost = crate::pricing::calculate_cost_precise(&model, input_tokens, cache_write, cache_read, output_tokens);
 
         let record_status = if resp_status.is_success() { "success" }
             else if resp_status.as_u16() == 429 { "rate_limited" }
@@ -455,6 +491,8 @@ async fn proxy_handler(
                 None => format!("AI Hub Proxy → {}", provider_name),
             },
             project, git_branch, working_dir,
+            cache_creation_tokens: cache_write,
+            cache_read_tokens: cache_read,
         };
         state.db.insert_traffic(&record).ok();
 

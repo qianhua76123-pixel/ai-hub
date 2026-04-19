@@ -10,6 +10,7 @@ import Billing from "./pages/Billing";
 import SettingsPage from "./pages/SettingsPage";
 import Conversations from "./pages/Conversations";
 import Advisor from "./pages/Advisor";
+import News from "./pages/News";
 import Rankings from "./pages/Rankings";
 import "./index.css";
 import { initTheme } from "./lib/theme";
@@ -28,6 +29,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
           <Route path="/usage" element={<Usage />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/advisor" element={<Advisor />} />
+          <Route path="/news" element={<News />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>

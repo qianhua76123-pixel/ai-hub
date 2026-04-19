@@ -192,6 +192,8 @@ fn parse_claude_log_entry(val: &serde_json::Value, db: &Arc<Database>) {
         project: project_name,
         git_branch: branch,
         working_dir: cwd.to_string(),
+        cache_creation_tokens: cache_creation,
+        cache_read_tokens: cache_read,
     };
 
     db.insert_traffic(&record).ok();
@@ -275,6 +277,8 @@ pub fn scan_codex_logs(db: &Arc<Database>) {
                     project: String::new(),
                     git_branch: String::new(),
                     working_dir: String::new(),
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
                 };
 
                 db.insert_traffic(&record).ok();
@@ -343,6 +347,8 @@ pub fn scan_codex_logs(db: &Arc<Database>) {
                     project: String::new(),
                     git_branch: String::new(),
                     working_dir: String::new(),
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
                 };
 
                 db.insert_traffic(&record).ok();
@@ -412,6 +418,8 @@ pub fn scan_cursor_logs(db: &Arc<Database>) {
                 project: String::new(),
                 git_branch: String::new(),
                 working_dir: String::new(),
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
             };
 
             db.insert_traffic(&record).ok();
@@ -457,6 +465,8 @@ pub fn scan_cursor_logs(db: &Arc<Database>) {
                 project: String::new(),
                 git_branch: String::new(),
                 working_dir: String::new(),
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
             };
 
             db.insert_traffic(&record).ok();

@@ -13,6 +13,7 @@ mod keystore;
 mod benchmarks;
 mod notify;
 mod advisor;
+mod news;
 mod rankings;
 
 use db::{Database, TrafficRecord, DailyUsage, TaskRecord, ConversationRecord};
@@ -246,6 +247,44 @@ fn get_cost_comparison(state: tauri::State<'_, AppState>) -> serde_json::Value {
 #[tauri::command]
 fn recommend_route(prompt: String) -> router::TaskClassification {
     router::recommend_models(&prompt)
+}
+
+// ===== 缓存摘要 =====
+
+#[tauri::command]
+fn get_cache_summary(state: tauri::State<'_, AppState>) -> serde_json::Value {
+    state.db.get_cache_summary().unwrap_or(serde_json::json!({}))
+}
+
+#[tauri::command]
+fn get_today_stats(state: tauri::State<'_, AppState>) -> serde_json::Value {
+    state.db.get_today_stats().unwrap_or(serde_json::json!({ "requests": 0, "tokens": 0, "cost": 0.0 }))
+}
+
+// ===== 账户模式（订阅 vs API）=====
+
+#[tauri::command]
+fn get_account_modes(state: tauri::State<'_, AppState>) -> Vec<serde_json::Value> {
+    state.db.get_account_modes().unwrap_or_default()
+}
+
+#[tauri::command]
+fn set_account_mode(state: tauri::State<'_, AppState>, provider_id: String, mode: String, subscription_monthly_usd: f64) -> Result<String, String> {
+    if !matches!(mode.as_str(), "api" | "subscription" | "hybrid") {
+        return Err("mode 必须是 api/subscription/hybrid".into());
+    }
+    state.db.set_account_mode(&provider_id, &mode, subscription_monthly_usd).map_err(|e| e.to_string())?;
+    Ok(format!("{} 账户模式已设为 {}", provider_id, mode))
+}
+
+#[tauri::command]
+fn get_cost_breakdown(state: tauri::State<'_, AppState>, days: i64) -> serde_json::Value {
+    state.db.get_cost_breakdown(days).unwrap_or(serde_json::json!({}))
+}
+
+#[tauri::command]
+async fn fetch_news() -> news::NewsResult {
+    news::fetch_all().await
 }
 
 // ===== 订阅顾问 =====
@@ -755,7 +794,9 @@ pub fn run() {
             get_env_exports, install_shell_proxy, uninstall_shell_proxy,
             get_model_prices, get_subscription_plans, get_cost_comparison, get_pricing_info, update_model_price, fetch_latest_pricing,
             recommend_route, refresh_exchange_rate, get_budgets, set_budget, delete_budget, get_budget_status,
-            add_user_subscription, get_user_subscriptions, delete_user_subscription, get_subscription_recommendations, get_stack_cost_estimate, get_provider_health, get_rate_limit_status, get_usage_by_project, get_subscription_roi, tag_traffic_project, get_route_decision,
+            add_user_subscription, get_user_subscriptions, delete_user_subscription, get_subscription_recommendations, get_stack_cost_estimate,
+            get_cache_summary, get_today_stats, fetch_news,
+            get_account_modes, set_account_mode, get_cost_breakdown, get_provider_health, get_rate_limit_status, get_usage_by_project, get_subscription_roi, tag_traffic_project, get_route_decision,
             get_available_providers, get_tasks, get_task_detail, get_subtasks,
             create_task, create_multi_agent_task,
             search_conversations, get_recent_conversations, get_conversation_sources, refresh_conversations,

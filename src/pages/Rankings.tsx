@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "../lib/utils";
-import { RefreshCw, Trophy, Code2, Eye, Sparkles, Filter, ArrowUpDown, ChevronDown } from "lucide-react";
+import { RefreshCw, Trophy, Code2, Eye, Sparkles, Filter, ArrowUpDown, ChevronDown, FileText, Search, Image as ImageIcon } from "lucide-react";
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -21,6 +21,9 @@ interface RankingsResult {
   arena_text: RankedModel[];
   arena_code: RankedModel[];
   arena_vision: RankedModel[];
+  arena_document: RankedModel[];
+  arena_search: RankedModel[];
+  arena_image: RankedModel[];
   artificial_analysis: RankedModel[];
   fetched_at: string;
   errors: string[];
@@ -28,13 +31,16 @@ interface RankingsResult {
 
 // ── Constants ───────────────────────────────────────────────
 
-type TabKey = "arena_text" | "arena_code" | "arena_vision" | "artificial_analysis";
+type TabKey = "arena_text" | "arena_code" | "arena_vision" | "arena_document" | "arena_search" | "arena_image" | "artificial_analysis";
 
 const TABS: { key: TabKey; label: string; icon: typeof Trophy; color: string }[] = [
-  { key: "arena_text", label: "Arena 综合", icon: Trophy, color: "#0d9488" },
-  { key: "arena_code", label: "Arena 编程", icon: Code2, color: "#0ea5e9" },
-  { key: "arena_vision", label: "Arena 视觉", icon: Eye, color: "#8b5cf6" },
-  { key: "artificial_analysis", label: "AA 质量指数", icon: Sparkles, color: "#f59e0b" },
+  { key: "arena_text", label: "综合对话", icon: Trophy, color: "#0d9488" },
+  { key: "arena_code", label: "编程", icon: Code2, color: "#0ea5e9" },
+  { key: "arena_vision", label: "视觉理解", icon: Eye, color: "#8b5cf6" },
+  { key: "arena_document", label: "文档阅读", icon: FileText, color: "#6366f1" },
+  { key: "arena_search", label: "搜索问答", icon: Search, color: "#f97316" },
+  { key: "arena_image", label: "图像生成", icon: ImageIcon, color: "#ec4899" },
+  { key: "artificial_analysis", label: "AA 质量", icon: Sparkles, color: "#f59e0b" },
 ];
 
 const PROVIDER_COLORS: Record<string, string> = {

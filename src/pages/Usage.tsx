@@ -4,7 +4,7 @@ import { RefreshCw, FolderGit2, Download, Pencil, Check } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
 import { cn, formatTokens } from "../lib/utils";
 
-interface ProviderUsage { provider_id: string; model: string; requests: number; input_tokens: number; output_tokens: number; cost: number; last_use: number; }
+interface ProviderUsage { provider_id: string; model: string; requests: number; input_tokens: number; output_tokens: number; cache_write_tokens: number; cache_read_tokens: number; cost: number; last_use: number; }
 interface DailyUsage { day: string; tokens: number; }
 interface TotalStats { requests: number; tokens: number; cost: number; }
 interface HourlyUsage { hour: string; provider_id: string; requests: number; tokens: number; }
@@ -214,15 +214,24 @@ export default function Usage() {
       {/* Model usage table */}
       {viewMode === "model" && byProvider.length > 0 && <div className="card overflow-hidden">
         <table className="w-full text-[13px]"><thead><tr className="text-text-faint text-[11px] border-b border-border-light bg-surface-lighter">
-          <th className="text-left px-4 py-2.5 font-medium">模型</th><th className="text-right px-4 py-2.5 font-medium">请求</th><th className="text-right px-4 py-2.5 font-medium">输入</th><th className="text-right px-4 py-2.5 font-medium">输出</th><th className="text-right px-4 py-2.5 font-medium">费用</th><th className="text-right px-4 py-2.5 font-medium">最后</th>
+          <th className="text-left px-4 py-2.5 font-medium">模型</th>
+          <th className="text-right px-3 py-2.5 font-medium">请求</th>
+          <th className="text-right px-3 py-2.5 font-medium">新输入</th>
+          <th className="text-right px-3 py-2.5 font-medium"><span className="text-warning">缓存写</span></th>
+          <th className="text-right px-3 py-2.5 font-medium"><span className="text-success">缓存读</span></th>
+          <th className="text-right px-3 py-2.5 font-medium">输出</th>
+          <th className="text-right px-3 py-2.5 font-medium">费用</th>
+          <th className="text-right px-3 py-2.5 font-medium">最后</th>
         </tr></thead><tbody>{byProvider.map((p) => (
           <tr key={`${p.provider_id}-${p.model}`} className="border-b border-border-light/50 hover:bg-surface-lighter/50 transition-colors">
             <td className="px-4 py-2.5"><span className="inline-block w-2 h-2 rounded-full mr-2 align-middle" style={{ backgroundColor: pc[p.provider_id] }} />{p.model}<span className="text-text-faint ml-2">{pn[p.provider_id]}</span></td>
-            <td className="text-right px-4 py-2.5 text-text-muted">{p.requests.toLocaleString()}</td>
-            <td className="text-right px-4 py-2.5 text-text-muted font-mono text-[12px]">{formatTokens(p.input_tokens)}</td>
-            <td className="text-right px-4 py-2.5 text-text-muted font-mono text-[12px]">{formatTokens(p.output_tokens)}</td>
-            <td className="text-right px-4 py-2.5 font-medium">¥{(p.cost * cnyRate).toFixed(2)}</td>
-            <td className="text-right px-4 py-2.5 text-text-faint text-[12px]">{timeAgo(p.last_use)}</td>
+            <td className="text-right px-3 py-2.5 text-text-muted">{p.requests.toLocaleString()}</td>
+            <td className="text-right px-3 py-2.5 text-text-muted font-mono text-[12px]">{formatTokens(p.input_tokens)}</td>
+            <td className="text-right px-3 py-2.5 font-mono text-[12px] text-warning">{p.cache_write_tokens > 0 ? formatTokens(p.cache_write_tokens) : "-"}</td>
+            <td className="text-right px-3 py-2.5 font-mono text-[12px] text-success">{p.cache_read_tokens > 0 ? formatTokens(p.cache_read_tokens) : "-"}</td>
+            <td className="text-right px-3 py-2.5 text-text-muted font-mono text-[12px]">{formatTokens(p.output_tokens)}</td>
+            <td className="text-right px-3 py-2.5 font-medium">¥{(p.cost * cnyRate).toFixed(2)}</td>
+            <td className="text-right px-3 py-2.5 text-text-faint text-[12px]">{timeAgo(p.last_use)}</td>
           </tr>))}</tbody></table>
       </div>}
     </div>

@@ -207,7 +207,12 @@ pub fn calculate_cost_precise(model: &str, input_tokens: i64, cache_write_tokens
 
     match price {
         Some(p) => {
-            let cw_price = if p.cache_write_per_m > 0.0 { p.cache_write_per_m } else { p.input_per_m };
+            // 价格语义:
+            //   cache_write_per_m > 0: 显式写入费率 (如 Anthropic 1.25x input)
+            //   cache_write_per_m == 0: 免费写入 (OpenAI/Gemini 风格)
+            //   cache_read_per_m > 0: 显式读取费率 (通常是 input 的 10%-50%)
+            //   cache_read_per_m == 0: 该 provider 无缓存机制, 若出现 cache_read tokens 则视为 input 计费
+            let cw_price = p.cache_write_per_m; // 0 = 免费
             let cr_price = if p.cache_read_per_m > 0.0 { p.cache_read_per_m } else { p.input_per_m };
 
             let input_cost = input_tokens as f64 * p.input_per_m / 1_000_000.0;

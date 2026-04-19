@@ -22,6 +22,10 @@ pub struct TrafficRecord {
     pub git_branch: String,
     #[serde(default)]
     pub working_dir: String,
+    #[serde(default)]
+    pub cache_creation_tokens: i64,  // 新写入缓存的 token（一次性付费，~1.25x input 价格）
+    #[serde(default)]
+    pub cache_read_tokens: i64,      // 从缓存读取的 token（折扣价，~10% input 价格）
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +149,25 @@ impl Database {
             );
         }
 
+        // v5: add cache token columns to traffic
+        if current_version < 5 {
+            let _ = conn.execute("ALTER TABLE traffic ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0", []);
+            let _ = conn.execute("ALTER TABLE traffic ADD COLUMN cache_read_tokens INTEGER DEFAULT 0", []);
+        }
+
+        // v6: account mode per provider (api/subscription/hybrid)
+        if current_version < 6 {
+            let _ = conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS account_modes (
+                    provider_id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'api',  -- api | subscription | hybrid
+                    subscription_monthly_usd REAL DEFAULT 0.0,
+                    updated_at INTEGER NOT NULL DEFAULT 0
+                );"
+            );
+            let _ = conn.execute("ALTER TABLE traffic ADD COLUMN cost_mode TEXT DEFAULT 'api'", []);
+        }
+
         // v4: user subscriptions table (for advisor)
         if current_version < 4 {
             let _ = conn.execute_batch(
@@ -162,8 +185,8 @@ impl Database {
         }
 
         // Track schema version
-        if current_version < 4 {
-            let _ = conn.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (4)", []);
+        if current_version < 6 {
+            let _ = conn.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (6)", []);
         }
 
         // 安全添加新列（忽略已存在错误）
@@ -190,6 +213,8 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT provider_id, model, COUNT(*) as cnt,
                     SUM(input_tokens) as input, SUM(output_tokens) as output,
+                    COALESCE(SUM(cache_creation_tokens), 0) as cache_write,
+                    COALESCE(SUM(cache_read_tokens), 0) as cache_read,
                     ROUND(SUM(estimated_cost), 4) as cost,
                     MIN(timestamp) as first_use, MAX(timestamp) as last_use
              FROM traffic GROUP BY provider_id, model ORDER BY cost DESC"
@@ -201,12 +226,85 @@ impl Database {
                 "requests": row.get::<_, i64>(2)?,
                 "input_tokens": row.get::<_, i64>(3)?,
                 "output_tokens": row.get::<_, i64>(4)?,
-                "cost": row.get::<_, f64>(5)?,
-                "first_use": row.get::<_, i64>(6)?,
-                "last_use": row.get::<_, i64>(7)?,
+                "cache_write_tokens": row.get::<_, i64>(5)?,
+                "cache_read_tokens": row.get::<_, i64>(6)?,
+                "cost": row.get::<_, f64>(7)?,
+                "first_use": row.get::<_, i64>(8)?,
+                "last_use": row.get::<_, i64>(9)?,
             }))
         })?.filter_map(|r| r.ok()).collect();
         Ok(records)
+    }
+
+    /// 今日真实统计（请求数/token/费用），全量 DB 汇总
+    /// Token 口径: 真实新消耗 = input + cache_write + output (不含 cache_read，避免重复上下文累加)
+    /// cache_read 单独字段返回，前端可显示"缓存复用量"
+    pub fn get_today_stats(&self) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let today_start = chrono::Local::now().date_naive().and_hms_opt(0,0,0)
+            .and_then(|n| n.and_local_timezone(chrono::Local).single())
+            .map(|dt| dt.timestamp_millis()).unwrap_or(0);
+        let (requests, tokens, cache_reused, cost) = conn.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(input_tokens + cache_creation_tokens + output_tokens), 0),
+                    COALESCE(SUM(cache_read_tokens), 0),
+                    COALESCE(SUM(estimated_cost), 0.0)
+             FROM traffic WHERE timestamp >= ?1",
+            params![today_start],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, f64>(3)?)),
+        ).unwrap_or((0, 0, 0, 0.0));
+        Ok(serde_json::json!({
+            "requests": requests,
+            "tokens": tokens,           // 真实新消耗
+            "cache_reused": cache_reused, // 复用缓存 token（不重复计费）
+            "cost": cost,
+        }))
+    }
+
+    /// 汇总缓存节省统计
+    pub fn get_cache_summary(&self) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let today_start = chrono::Local::now().date_naive().and_hms_opt(0,0,0)
+            .and_then(|n| n.and_local_timezone(chrono::Local).single())
+            .map(|dt| dt.timestamp_millis()).unwrap_or(0);
+        let month_start = {
+            let now = chrono::Local::now();
+            chrono::NaiveDate::from_ymd_opt(chrono::Datelike::year(&now), chrono::Datelike::month(&now), 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .and_then(|n| n.and_local_timezone(chrono::Local).single())
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or(0)
+        };
+        let row = conn.query_row(
+            "SELECT
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(output_tokens), 0)
+             FROM traffic WHERE timestamp >= ?1",
+            params![today_start],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)),
+        ).unwrap_or((0, 0, 0, 0));
+
+        let month_row = conn.query_row(
+            "SELECT
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(output_tokens), 0)
+             FROM traffic WHERE timestamp >= ?1",
+            params![month_start],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)),
+        ).unwrap_or((0, 0, 0, 0));
+
+        Ok(serde_json::json!({
+            "today": {
+                "input": row.0, "cache_write": row.1, "cache_read": row.2, "output": row.3
+            },
+            "month": {
+                "input": month_row.0, "cache_write": month_row.1, "cache_read": month_row.2, "output": month_row.3
+            },
+        }))
     }
 
     pub fn get_hourly_usage(&self, hours: i64) -> Result<Vec<serde_json::Value>> {
@@ -216,7 +314,7 @@ impl Database {
             "SELECT strftime('%Y-%m-%d %H:00', timestamp/1000, 'unixepoch', 'localtime') as hour,
                     provider_id,
                     COUNT(*) as cnt,
-                    SUM(input_tokens + output_tokens) as tokens,
+                    SUM(input_tokens + COALESCE(cache_creation_tokens,0) + output_tokens) as tokens,
                     ROUND(SUM(estimated_cost), 4) as cost
              FROM traffic WHERE timestamp >= ?1
              GROUP BY hour, provider_id ORDER BY hour ASC"
@@ -237,7 +335,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT COALESCE(NULLIF(project,''), '未分类') as proj,
-                    COUNT(*) as cnt, SUM(input_tokens + output_tokens) as tokens,
+                    COUNT(*) as cnt, SUM(input_tokens + COALESCE(cache_creation_tokens,0) + output_tokens) as tokens,
                     ROUND(SUM(estimated_cost), 4) as cost
              FROM traffic GROUP BY proj ORDER BY cost DESC"
         )?;
@@ -258,9 +356,16 @@ impl Database {
 
     pub fn insert_traffic(&self, record: &TrafficRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        // Look up account mode for this provider
+        let cost_mode: String = conn.query_row(
+            "SELECT mode FROM account_modes WHERE provider_id = ?1",
+            params![record.provider_id],
+            |row| row.get(0),
+        ).unwrap_or_else(|_| "api".to_string());
+
         conn.execute(
-            "INSERT OR IGNORE INTO traffic (id, timestamp, provider_id, model, endpoint, input_tokens, output_tokens, latency_ms, status, estimated_cost, source, project, git_branch, working_dir)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT OR IGNORE INTO traffic (id, timestamp, provider_id, model, endpoint, input_tokens, output_tokens, latency_ms, status, estimated_cost, source, project, git_branch, working_dir, cache_creation_tokens, cache_read_tokens, cost_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 record.id,
                 record.timestamp,
@@ -276,15 +381,96 @@ impl Database {
                 record.project,
                 record.git_branch,
                 record.working_dir,
+                record.cache_creation_tokens,
+                record.cache_read_tokens,
+                cost_mode,
             ],
         )?;
         Ok(())
     }
 
+    // ===== Account Modes =====
+
+    pub fn get_account_modes(&self) -> Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT provider_id, mode, subscription_monthly_usd FROM account_modes")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(serde_json::json!({
+                "provider_id": r.get::<_, String>(0)?,
+                "mode": r.get::<_, String>(1)?,
+                "subscription_monthly_usd": r.get::<_, f64>(2)?,
+            }))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(rows)
+    }
+
+    pub fn set_account_mode(&self, provider_id: &str, mode: &str, subscription_usd: f64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO account_modes (provider_id, mode, subscription_monthly_usd, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![provider_id, mode, subscription_usd, chrono::Utc::now().timestamp_millis()],
+        )?;
+        // Retroactively update existing traffic records for this provider
+        conn.execute(
+            "UPDATE traffic SET cost_mode = ?2 WHERE provider_id = ?1",
+            params![provider_id, mode],
+        )?;
+        Ok(())
+    }
+
+    /// 费用拆分：按模式汇总（api = 真实付费，subscription = 虚拟等价，hybrid = 超限部分）
+    pub fn get_cost_breakdown(&self, days: i64) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let cutoff = chrono::Utc::now().timestamp_millis() - (days * 86400 * 1000);
+
+        let mut api_cost = 0.0_f64;
+        let mut sub_virtual_cost = 0.0_f64;
+        let mut hybrid_cost = 0.0_f64;
+        let mut api_requests = 0_i64;
+        let mut sub_requests = 0_i64;
+
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(cost_mode, 'api') as mode, COUNT(*), COALESCE(SUM(estimated_cost), 0)
+             FROM traffic WHERE timestamp >= ?1 GROUP BY mode"
+        )?;
+        let rows = stmt.query_map(params![cutoff], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?))
+        })?;
+        for row in rows.flatten() {
+            match row.0.as_str() {
+                "api" => { api_requests = row.1; api_cost = row.2; }
+                "subscription" => { sub_requests = row.1; sub_virtual_cost = row.2; }
+                "hybrid" => { hybrid_cost = row.2; }
+                _ => {}
+            }
+        }
+
+        // Sum subscription monthly fees user declared
+        let sub_monthly_fee: f64 = conn.query_row(
+            "SELECT COALESCE(SUM(subscription_monthly_usd), 0) FROM account_modes WHERE mode='subscription' OR mode='hybrid'",
+            [], |r| r.get(0)
+        ).unwrap_or(0.0);
+
+        let savings = sub_virtual_cost - sub_monthly_fee;
+
+        Ok(serde_json::json!({
+            "api_cost_usd": api_cost,
+            "api_requests": api_requests,
+            "subscription_virtual_cost_usd": sub_virtual_cost,
+            "subscription_requests": sub_requests,
+            "subscription_monthly_fee_usd": sub_monthly_fee,
+            "subscription_savings_usd": savings,
+            "hybrid_cost_usd": hybrid_cost,
+            "total_actual_usd": api_cost + sub_monthly_fee + hybrid_cost,
+            "total_virtual_equivalent_usd": api_cost + sub_virtual_cost + hybrid_cost,
+        }))
+    }
+
     pub fn get_recent_traffic(&self, limit: i64) -> Result<Vec<TrafficRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, provider_id, model, endpoint, input_tokens, output_tokens, latency_ms, status, estimated_cost, source, COALESCE(project,''), COALESCE(git_branch,''), COALESCE(working_dir,'')
+            "SELECT id, timestamp, provider_id, model, endpoint, input_tokens, output_tokens, latency_ms, status, estimated_cost, source, COALESCE(project,''), COALESCE(git_branch,''), COALESCE(working_dir,''), COALESCE(cache_creation_tokens,0), COALESCE(cache_read_tokens,0)
              FROM traffic ORDER BY timestamp DESC LIMIT ?1"
         )?;
 
@@ -304,6 +490,8 @@ impl Database {
                 project: row.get(11)?,
                 git_branch: row.get(12)?,
                 working_dir: row.get(13)?,
+                cache_creation_tokens: row.get(14)?,
+                cache_read_tokens: row.get(15)?,
             })
         })?.filter_map(|r| r.ok()).collect();
 
@@ -314,9 +502,10 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let cutoff = chrono::Utc::now().timestamp_millis() - (days * 86400 * 1000);
 
+        // 统一口径: 新消耗 token = input + cache_write + output (cache_read 不计入，避免重复)
         let mut stmt = conn.prepare(
             "SELECT date(timestamp / 1000, 'unixepoch', 'localtime') as day,
-                    SUM(input_tokens + output_tokens) as tokens
+                    SUM(input_tokens + COALESCE(cache_creation_tokens,0) + output_tokens) as tokens
              FROM traffic
              WHERE timestamp >= ?1
              GROUP BY day
@@ -348,7 +537,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT provider_id,
                     COUNT(*) as request_count,
-                    SUM(input_tokens + output_tokens) as total_tokens,
+                    SUM(input_tokens + COALESCE(cache_creation_tokens,0) + output_tokens) as total_tokens,
                     SUM(estimated_cost) as total_cost
              FROM traffic
              WHERE timestamp >= ?1
@@ -374,7 +563,7 @@ impl Database {
     pub fn get_total_stats(&self) -> Result<(i64, i64, f64)> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT COUNT(*), COALESCE(SUM(input_tokens + output_tokens), 0), COALESCE(SUM(estimated_cost), 0.0) FROM traffic"
+            "SELECT COUNT(*), COALESCE(SUM(input_tokens + COALESCE(cache_creation_tokens,0) + output_tokens), 0), COALESCE(SUM(estimated_cost), 0.0) FROM traffic"
         )?;
         let result = stmt.query_row([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, f64>(2)?))
@@ -703,7 +892,8 @@ impl Database {
             let now = chrono::Local::now();
             chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
                 .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .map(|dt| dt.and_utc().timestamp_millis())
+                .and_then(|n| n.and_local_timezone(chrono::Local).single())
+                .map(|dt| dt.timestamp_millis())
                 .unwrap_or(0)
         };
         conn.query_row(
@@ -867,6 +1057,8 @@ mod tests {
             project: "test-project".to_string(),
             git_branch: "main".to_string(),
             working_dir: "/tmp".to_string(),
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
         }
     }
 

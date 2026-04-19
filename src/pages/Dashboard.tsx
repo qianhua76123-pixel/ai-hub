@@ -10,7 +10,7 @@ interface TrafficRecord { id: string; timestamp: number; provider_id: string; mo
 interface DailyUsage { day: string; tokens: number; }
 interface RateLimitStatus { provider_id: string; provider_name: string; status: string; latency_ms: number; error_rate: number; rate_limit_remaining: number | null; warning_level: string; estimated_minutes_left: number | null; last_check: number; }
 interface RankedModel { rank: number; name: string; provider: string; score: number; source: string; category: string; votes: number; ci: number; license: string; }
-interface RankingsResult { arena_text: RankedModel[]; arena_code: RankedModel[]; arena_vision: RankedModel[]; artificial_analysis: RankedModel[]; fetched_at: string; errors: string[]; }
+interface RankingsResult { arena_text: RankedModel[]; arena_code: RankedModel[]; arena_vision: RankedModel[]; arena_document?: RankedModel[]; arena_search?: RankedModel[]; arena_image?: RankedModel[]; artificial_analysis: RankedModel[]; fetched_at: string; errors: string[]; }
 
 const tt = { backgroundColor: "var(--color-surface-light)", border: "1px solid var(--color-border)", borderRadius: "10px", color: "var(--color-text)", fontSize: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.1)" };
 
@@ -27,6 +27,8 @@ export default function Dashboard() {
   const [cnyRate, setCnyRate] = useState(7.2);
   const [budget, setBudget] = useState<{ monthly_spend_usd: number; monthly_limit_usd: number; percent: number; warning_level: string } | null>(null);
   const [topModels, setTopModels] = useState<RankedModel[]>([]);
+  const [cacheSummary, setCacheSummary] = useState<{ today: { input: number; cache_write: number; cache_read: number; output: number }; month: { input: number; cache_write: number; cache_read: number; output: number } } | null>(null);
+  const [costBreakdown, setCostBreakdown] = useState<{ api_cost_usd: number; api_requests: number; subscription_virtual_cost_usd: number; subscription_requests: number; subscription_monthly_fee_usd: number; subscription_savings_usd: number; total_actual_usd: number; total_virtual_equivalent_usd: number } | null>(null);
 
   useEffect(() => {
     invoke<DetectedProvider[]>("scan_providers").then(setProviders);
@@ -34,15 +36,17 @@ export default function Dashboard() {
     invoke<RankingsResult>("fetch_rankings", { aaApiKey: null }).then(r => setTopModels(r.arena_text.slice(0, 5))).catch(() => {});
     invoke<{ requests: number; tokens: number; cost: number }>("get_total_stats").then(setTotalStats).catch(() => {});
     const load = () => {
-      invoke<TrafficRecord[]>("get_recent_traffic", { limit: 20 }).then((r) => {
-        setTraffic(r);
-        const s = new Date(); s.setHours(0, 0, 0, 0);
-        const t = r.filter((x) => x.timestamp >= s.getTime());
-        setTodayStats({ tasks: t.length, tokens: t.reduce((a, x) => a + x.input_tokens + x.output_tokens, 0), cost: t.reduce((a, x) => a + x.estimated_cost, 0) });
-      }).catch(() => {});
+      // 实时流量列表（仅用于显示最近 20 条，不用于统计）
+      invoke<TrafficRecord[]>("get_recent_traffic", { limit: 20 }).then(setTraffic).catch(() => {});
+      // 今日真实统计（后端全量 SUM，不受 limit 影响）
+      invoke<{ requests: number; tokens: number; cost: number }>("get_today_stats")
+        .then(s => setTodayStats({ tasks: s.requests, tokens: s.tokens, cost: s.cost }))
+        .catch(() => {});
       invoke<DailyUsage[]>("get_daily_usage", { days: 7 }).then(setDailyUsage).catch(() => {});
       invoke<RateLimitStatus[]>("get_rate_limit_status").then(setHealthData).catch(() => {});
       invoke<{ monthly_spend_usd: number; monthly_limit_usd: number; percent: number; warning_level: string }>("get_budget_status").then(setBudget).catch(() => {});
+      invoke<{ today: { input: number; cache_write: number; cache_read: number; output: number }; month: { input: number; cache_write: number; cache_read: number; output: number } }>("get_cache_summary").then(setCacheSummary).catch(() => {});
+      invoke<typeof costBreakdown>("get_cost_breakdown", { days: 30 }).then(setCostBreakdown).catch(() => {});
     };
     load(); const i = setInterval(load, 10000); return () => clearInterval(i);
   }, []);
@@ -85,7 +89,7 @@ export default function Dashboard() {
         {[
           { label: "已接入工具", value: String(providers.length), sub: "个", color: "#0d9488" },
           { label: "今日请求", value: todayStats.tasks.toLocaleString(), sub: "次", color: "#0ea5e9" },
-          { label: "今日 Token", value: formatTokens(todayStats.tokens), sub: "", color: "#f59e0b" },
+          { label: "今日新消耗 Token", value: formatTokens(todayStats.tokens), sub: "", color: "#f59e0b" },
           { label: "今日费用", value: "¥" + (todayStats.cost * cnyRate).toFixed(2), sub: "", color: "#ef4444" },
         ].map((s) => (
           <div key={s.label} className="card p-5 glow-teal">
@@ -96,6 +100,92 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {/* Cost breakdown: API actual vs Subscription virtual */}
+      {costBreakdown && (costBreakdown.api_cost_usd > 0 || costBreakdown.subscription_virtual_cost_usd > 0) && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[13px] font-medium text-text-muted">近 30 天费用构成</h2>
+            <span className="text-[11px] text-text-faint">实际付费 vs 订阅等价</span>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-primary/5 rounded-[10px] p-3 border border-primary/15">
+              <div className="text-[11px] text-text-muted mb-1">API 实际付费</div>
+              <div className="text-[20px] font-semibold text-primary">
+                ¥{(costBreakdown.api_cost_usd * cnyRate).toFixed(2)}
+              </div>
+              <div className="text-[10px] text-text-faint mt-0.5">{costBreakdown.api_requests.toLocaleString()} 次请求</div>
+            </div>
+            <div className="bg-success/5 rounded-[10px] p-3 border border-success/15">
+              <div className="text-[11px] text-text-muted mb-1">订阅月费</div>
+              <div className="text-[20px] font-semibold text-success">
+                ¥{(costBreakdown.subscription_monthly_fee_usd * cnyRate).toFixed(0)}
+              </div>
+              <div className="text-[10px] text-text-faint mt-0.5">{costBreakdown.subscription_requests.toLocaleString()} 次请求</div>
+            </div>
+            <div className="bg-warning/5 rounded-[10px] p-3 border border-warning/15">
+              <div className="text-[11px] text-text-muted mb-1">订阅虚拟等价（按 API 算）</div>
+              <div className="text-[20px] font-semibold text-warning">
+                ¥{(costBreakdown.subscription_virtual_cost_usd * cnyRate).toFixed(2)}
+              </div>
+              <div className="text-[10px] text-success mt-0.5">
+                {costBreakdown.subscription_savings_usd > 0
+                  ? `订阅省 ¥${(costBreakdown.subscription_savings_usd * cnyRate).toFixed(0)}`
+                  : `API 省 ¥${(Math.abs(costBreakdown.subscription_savings_usd) * cnyRate).toFixed(0)}`}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 pt-3 border-t border-border-light text-[11px] text-text-faint">
+            总实际支出 <strong className="text-text-muted">¥{(costBreakdown.total_actual_usd * cnyRate).toFixed(2)}</strong>
+            {" "}· 按 API 全量计费等价 <strong className="text-text-muted">¥{(costBreakdown.total_virtual_equivalent_usd * cnyRate).toFixed(2)}</strong>
+            {costBreakdown.subscription_monthly_fee_usd === 0 && (
+              <span className="ml-2 text-warning">· 未设置订阅？到 <strong>设置 → 账户模式</strong> 标记</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Token breakdown — show cache efficiency */}
+      {cacheSummary && (cacheSummary.today.cache_read > 0 || cacheSummary.today.cache_write > 0) && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[13px] font-medium text-text-muted">今日 Token 结构</h2>
+            {cacheSummary.today.cache_read > 0 && (
+              <span className="text-[11px] text-success">
+                缓存复用率 {(cacheSummary.today.cache_read / (cacheSummary.today.input + cacheSummary.today.cache_write + cacheSummary.today.cache_read) * 100).toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            <div>
+              <div className="text-[11px] text-text-faint mb-1">新输入</div>
+              <div className="text-[18px] font-semibold">{formatTokens(cacheSummary.today.input)}</div>
+              <div className="text-[10px] text-text-faint mt-0.5">用户新消息</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-text-faint mb-1">缓存写入</div>
+              <div className="text-[18px] font-semibold text-warning">{formatTokens(cacheSummary.today.cache_write)}</div>
+              <div className="text-[10px] text-text-faint mt-0.5">~1.25x 价</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-text-faint mb-1">缓存读取</div>
+              <div className="text-[18px] font-semibold text-success">{formatTokens(cacheSummary.today.cache_read)}</div>
+              <div className="text-[10px] text-text-faint mt-0.5">~10% 价 (省 90%)</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-text-faint mb-1">输出</div>
+              <div className="text-[18px] font-semibold text-primary">{formatTokens(cacheSummary.today.output)}</div>
+              <div className="text-[10px] text-text-faint mt-0.5">AI 回复</div>
+            </div>
+          </div>
+          {cacheSummary.today.cache_read > 0 && (
+            <div className="mt-3 pt-3 border-t border-border-light text-[11px] text-text-faint">
+              若没有缓存，相同上下文会按 <strong className="text-text-muted">{formatTokens(cacheSummary.today.cache_read)}</strong> tokens × 全价计费。
+              缓存让你实际只付了约 <strong className="text-success">{(cacheSummary.today.cache_read * 0.1 / 1000).toFixed(1)}K</strong> 等价的费用。
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Cumulative — subtle row */}
       <div className="flex items-center gap-6 px-1">

@@ -6,9 +6,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// api.wulong.dev 实际支持的榜单 (验证通过):
+//   text / code / vision / document / search / text-to-image / image-edit /
+//   text-to-video / image-to-video / video-edit
 const ARENA_TEXT_URL: &str = "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=text";
 const ARENA_CODE_URL: &str = "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=code";
 const ARENA_VISION_URL: &str = "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=vision";
+const ARENA_DOCUMENT_URL: &str = "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=document";
+const ARENA_SEARCH_URL: &str = "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=search";
+const ARENA_IMAGE_URL: &str = "https://api.wulong.dev/arena-ai-leaderboards/v1/leaderboard?name=text-to-image";
 const AA_MODELS_URL: &str = "https://api.artificialanalysis.ai/v2/models";
 
 // ── Public types ────────────────────────────────────────────
@@ -34,6 +40,9 @@ pub struct RankingsResult {
     pub arena_text: Vec<RankedModel>,
     pub arena_code: Vec<RankedModel>,
     pub arena_vision: Vec<RankedModel>,
+    pub arena_document: Vec<RankedModel>,
+    pub arena_search: Vec<RankedModel>,
+    pub arena_image: Vec<RankedModel>,
     pub artificial_analysis: Vec<RankedModel>,
     pub fetched_at: String,
     pub errors: Vec<String>,
@@ -200,9 +209,22 @@ pub async fn fetch_all(aa_api_key: Option<String>) -> RankingsResult {
 
     let mut errors = Vec::new();
 
-    let arena_text = fetch_arena(&client, ARENA_TEXT_URL, "arena_text").await.unwrap_or_else(|e| { errors.push(e); vec![] });
-    let arena_code = fetch_arena(&client, ARENA_CODE_URL, "arena_code").await.unwrap_or_else(|e| { errors.push(e); vec![] });
-    let arena_vision = fetch_arena(&client, ARENA_VISION_URL, "arena_vision").await.unwrap_or_else(|e| { errors.push(e); vec![] });
+    // 并行获取所有 Arena 榜单（全部经过探测验证可用）
+    let (text, code, vision, doc, search, image) = tokio::join!(
+        fetch_arena(&client, ARENA_TEXT_URL, "arena_text"),
+        fetch_arena(&client, ARENA_CODE_URL, "arena_code"),
+        fetch_arena(&client, ARENA_VISION_URL, "arena_vision"),
+        fetch_arena(&client, ARENA_DOCUMENT_URL, "arena_document"),
+        fetch_arena(&client, ARENA_SEARCH_URL, "arena_search"),
+        fetch_arena(&client, ARENA_IMAGE_URL, "arena_image"),
+    );
+
+    let arena_text = text.unwrap_or_else(|e| { errors.push(e); vec![] });
+    let arena_code = code.unwrap_or_else(|e| { errors.push(e); vec![] });
+    let arena_vision = vision.unwrap_or_else(|e| { errors.push(e); vec![] });
+    let arena_document = doc.unwrap_or_else(|e| { errors.push(e); vec![] });
+    let arena_search = search.unwrap_or_else(|e| { errors.push(e); vec![] });
+    let arena_image = image.unwrap_or_else(|e| { errors.push(e); vec![] });
 
     let aa_key = aa_api_key.as_deref().filter(|k| !k.is_empty());
     let artificial_analysis = fetch_artificial_analysis(&client, aa_key).await.unwrap_or_else(|e| { errors.push(e); vec![] });
@@ -211,6 +233,9 @@ pub async fn fetch_all(aa_api_key: Option<String>) -> RankingsResult {
         arena_text,
         arena_code,
         arena_vision,
+        arena_document,
+        arena_search,
+        arena_image,
         artificial_analysis,
         fetched_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         errors,

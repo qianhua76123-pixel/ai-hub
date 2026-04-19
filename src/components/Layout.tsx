@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { LayoutDashboard, Zap, BarChart3, CreditCard, Settings, Radar, Search, MessageSquare, Trophy, Sparkles } from "lucide-react";
+import { LayoutDashboard, Zap, BarChart3, CreditCard, Settings, Radar, Search, MessageSquare, Trophy, Sparkles, Newspaper } from "lucide-react";
 import { cn } from "../lib/utils";
 import CommandPalette from "./CommandPalette";
 import Onboarding, { useOnboarding } from "./Onboarding";
@@ -14,6 +14,7 @@ const navItems = [
   { to: "/usage", icon: BarChart3, label: "用量" },
   { to: "/billing", icon: CreditCard, label: "订阅" },
   { to: "/advisor", icon: Sparkles, label: "顾问" },
+  { to: "/news", icon: Newspaper, label: "动态" },
   { to: "/settings", icon: Settings, label: "设置" },
 ];
 
