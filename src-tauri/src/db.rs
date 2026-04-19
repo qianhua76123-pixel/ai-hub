@@ -426,7 +426,6 @@ impl Database {
 
         let mut api_cost = 0.0_f64;
         let mut sub_virtual_cost = 0.0_f64;
-        let mut hybrid_cost = 0.0_f64;
         let mut api_requests = 0_i64;
         let mut sub_requests = 0_i64;
 
@@ -439,9 +438,9 @@ impl Database {
         })?;
         for row in rows.flatten() {
             match row.0.as_str() {
-                "api" => { api_requests = row.1; api_cost = row.2; }
-                "subscription" => { sub_requests = row.1; sub_virtual_cost = row.2; }
-                "hybrid" => { hybrid_cost = row.2; }
+                "api" => { api_requests += row.1; api_cost += row.2; }
+                // hybrid 绝大多数走订阅路径（API key 只是超限 fallback），归入订阅统计
+                "subscription" | "hybrid" => { sub_requests += row.1; sub_virtual_cost += row.2; }
                 _ => {}
             }
         }
@@ -461,9 +460,8 @@ impl Database {
             "subscription_requests": sub_requests,
             "subscription_monthly_fee_usd": sub_monthly_fee,
             "subscription_savings_usd": savings,
-            "hybrid_cost_usd": hybrid_cost,
-            "total_actual_usd": api_cost + sub_monthly_fee + hybrid_cost,
-            "total_virtual_equivalent_usd": api_cost + sub_virtual_cost + hybrid_cost,
+            "total_actual_usd": api_cost + sub_monthly_fee,
+            "total_virtual_equivalent_usd": api_cost + sub_virtual_cost,
         }))
     }
 

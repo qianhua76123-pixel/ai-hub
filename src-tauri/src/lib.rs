@@ -14,6 +14,7 @@ mod benchmarks;
 mod notify;
 mod advisor;
 mod news;
+mod detect;
 mod rankings;
 
 use db::{Database, TrafficRecord, DailyUsage, TaskRecord, ConversationRecord};
@@ -285,6 +286,19 @@ fn get_cost_breakdown(state: tauri::State<'_, AppState>, days: i64) -> serde_jso
 #[tauri::command]
 async fn fetch_news() -> news::NewsResult {
     news::fetch_all().await
+}
+
+// ===== 自动检测订阅/API 模式 =====
+
+#[tauri::command]
+fn detect_account_modes() -> Vec<detect::DetectedMode> {
+    detect::detect_all()
+}
+
+#[tauri::command]
+fn apply_detected_modes(state: tauri::State<'_, AppState>, results: Vec<detect::DetectedMode>) -> Result<String, String> {
+    let count = detect::apply_detection(&state.db, &results)?;
+    Ok(format!("已应用 {} 个 provider 的自动识别结果", count))
 }
 
 // ===== 订阅顾问 =====
@@ -765,9 +779,28 @@ pub fn run() {
     let db = Arc::new(database);
     let health_monitor = Arc::new(HealthMonitor::new());
 
+    // 首次启动自动检测账户模式（订阅 vs API）
+    let db_for_detect = db.clone();
+    std::thread::spawn(move || {
+        // 如果用户从未配置过 account_modes，就自动识别
+        let existing = db_for_detect.get_account_modes().unwrap_or_default();
+        if existing.is_empty() {
+            let detected = detect::detect_all();
+            let known: Vec<_> = detected.iter().filter(|d| d.detected_mode != "unknown").collect();
+            if !known.is_empty() {
+                for d in &known {
+                    let _ = db_for_detect.set_account_mode(&d.provider_id, &d.detected_mode, d.suggested_monthly_usd);
+                    println!("[Auto-detect] {} → {} ({})", d.provider_name, d.detected_mode, d.reason);
+                }
+            }
+        }
+    });
+
     // 启动扫描移到后台线程，避免阻塞 Tauri main thread（7000+ 条记录时会 spawn git 卡死）
     let db_for_initial_scan = db.clone();
     std::thread::spawn(move || {
+        // 等待 auto-detect 先完成（这样扫描到的新记录会打上正确 cost_mode）
+        std::thread::sleep(std::time::Duration::from_millis(500));
         traffic::scan_all_sources(&db_for_initial_scan);
         println!("[Traffic] Initial scan complete");
     });
@@ -801,7 +834,8 @@ pub fn run() {
             recommend_route, refresh_exchange_rate, get_budgets, set_budget, delete_budget, get_budget_status,
             add_user_subscription, get_user_subscriptions, delete_user_subscription, get_subscription_recommendations, get_stack_cost_estimate,
             get_cache_summary, get_today_stats, fetch_news,
-            get_account_modes, set_account_mode, get_cost_breakdown, get_provider_health, get_rate_limit_status, get_usage_by_project, get_subscription_roi, tag_traffic_project, get_route_decision,
+            get_account_modes, set_account_mode, get_cost_breakdown,
+            detect_account_modes, apply_detected_modes, get_provider_health, get_rate_limit_status, get_usage_by_project, get_subscription_roi, tag_traffic_project, get_route_decision,
             get_available_providers, get_tasks, get_task_detail, get_subtasks,
             create_task, create_multi_agent_task,
             search_conversations, get_recent_conversations, get_conversation_sources, refresh_conversations,
