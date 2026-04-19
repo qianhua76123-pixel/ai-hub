@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+@theme {
+  /* Teal accent — distinctive yet calm */
+  --color-primary: #0d9488;
+  --color-primary-light: #14b8a6;
+  --color-primary-dark: #0f766e;
+  --color-accent: #0ea5e9;
+  --color-accent-light: #38bdf8;
+  --color-accent-teal: #0d9488;
+
+  /* Light surfaces */
+  --color-surface: #f8f9fb;
+  --color-surface-light: #ffffff;
+  --color-surface-lighter: #f1f3f7;
+  --color-surface-elevated: #ffffff;
+  --color-sidebar: rgba(243, 244, 248, 0.78);
+
+  /* Borders */
+  --color-border: #e2e5eb;
+  --color-border-light: #ebedf2;
+
+  /* Text */
+  --color-text: #1a1d26;
+  --color-text-muted: #6b7080;
+  --color-text-faint: #9ca3af;
+
+  /* Status */
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+/* ===== Dark Mode ===== */
+/* Activates via system preference OR .dark class on <html> */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-primary: #14b8a6;
+    --color-primary-light: #2dd4bf;
+    --color-primary-dark: #0d9488;
+    --color-accent: #38bdf8;
+    --color-accent-light: #7dd3fc;
+
+    --color-surface: #0f1117;
+    --color-surface-light: #1a1d28;
+    --color-surface-lighter: #252832;
+    --color-surface-elevated: #1e2130;
+    --color-sidebar: rgba(15, 17, 23, 0.85);
+
+    --color-border: #2e3240;
+    --color-border-light: #252832;
+
+    --color-text: #e8eaed;
+    --color-text-muted: #9ca3b0;
+    --color-text-faint: #6b7080;
+
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+  }
+}
+
+/* Manual dark mode override */
+.dark {
+  --color-primary: #14b8a6;
+  --color-primary-light: #2dd4bf;
+  --color-primary-dark: #0d9488;
+  --color-accent: #38bdf8;
+  --color-accent-light: #7dd3fc;
+
+  --color-surface: #0f1117;
+  --color-surface-light: #1a1d28;
+  --color-surface-lighter: #252832;
+  --color-surface-elevated: #1e2130;
+  --color-sidebar: rgba(15, 17, 23, 0.85);
+
+  --color-border: #2e3240;
+  --color-border-light: #252832;
+
+  --color-text: #e8eaed;
+  --color-text-muted: #9ca3b0;
+  --color-text-faint: #6b7080;
+
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Premium scrollbar */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.25); }
+
+/* Frosted glass sidebar */
+.sidebar-glass {
+  background: var(--color-sidebar);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+/* Soft card elevation */
+.card {
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-border-light);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 0 0.5px rgba(0,0,0,0.06);
+}
+
+.card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 0 0.5px rgba(0,0,0,0.08);
+}
+
+/* Dark mode cards use lighter shadow */
+.dark .card,
+@media (prefers-color-scheme: dark) { :root:not(.light) .card {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 0 0.5px rgba(0,0,0,0.3);
+}}
+.dark .card:hover,
+@media (prefers-color-scheme: dark) { :root:not(.light) .card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0.5px rgba(0,0,0,0.4);
+}}
+
+/* Background gradient */
+.bg-gradient-scenic {
+  background: linear-gradient(135deg, var(--color-surface) 0%, #eef3fa 40%, #f4f0f8 70%, var(--color-surface) 100%);
+}
+.dark .bg-gradient-scenic,
+@media (prefers-color-scheme: dark) { :root:not(.light) .bg-gradient-scenic {
+  background: linear-gradient(135deg, #0f1117 0%, #111827 40%, #1a1025 70%, #0f1117 100%);
+}}
+
+/* Stat value — editorial large number */
+.stat-value {
+  font-family: "SF Pro Display", system-ui;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+/* Glow accent */
+.glow-teal {
+  box-shadow: 0 0 20px rgba(14, 165, 233, 0.08), 0 0 60px rgba(13, 148, 136, 0.04);
+}
+.dark .glow-teal,
+@media (prefers-color-scheme: dark) { :root:not(.light) .glow-teal {
+  box-shadow: 0 0 20px rgba(14, 165, 233, 0.12), 0 0 60px rgba(13, 148, 136, 0.08);
+}}
+
+/* Tooltip style */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--color-surface-light) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 10px !important;
+  color: var(--color-text) !important;
+}
